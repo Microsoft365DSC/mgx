@@ -340,11 +340,11 @@ Enable-MgxResilience   # Re-inject for the new connection</dev:code>
         <command:parameter required="true" variableLength="true" globbing="false" pipelineInput="True (ByValue)" position="named" aliases="none">
           <maml:name>InputObject</maml:name>
           <maml:description>
-            <maml:para>The object to enrich with related data. Accepts any PSObject from the pipeline. Must have a property matching -IdProperty (default: id) whose value is substituted into the -Uri template.</maml:para>
+            <maml:para>The object to enrich with related data. Accepts a Hashtable (such as the output of another Mgx cmdlet) or a PSCustomObject from the pipeline. Must have a member matching -IdProperty (default: id) whose value is substituted into the -Uri template. The relation is attached in the same shape the object arrived in.</maml:para>
           </maml:description>
-          <command:parameterValue required="true" variableLength="false">PSObject</command:parameterValue>
+          <command:parameterValue required="true" variableLength="false">Object</command:parameterValue>
           <dev:type>
-            <maml:name>PSObject</maml:name>
+            <maml:name>Object</maml:name>
             <maml:uri />
           </dev:type>
           <dev:defaultValue>None</dev:defaultValue>
@@ -352,7 +352,7 @@ Enable-MgxResilience   # Re-inject for the new connection</dev:code>
         <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
           <maml:name>Flatten</maml:name>
           <maml:description>
-            <maml:para>Unwrap single-value relations. When the endpoint returns exactly one item (or a singleton object like /manager), the result is attached as a single PSObject instead of a one-element array. If multiple items are returned, a warning is emitted and the array is returned as-is.</maml:para>
+            <maml:para>Unwrap single-value relations. When the endpoint returns exactly one item (or a singleton object like /manager), the result is attached as a single Hashtable instead of a one-element array. If multiple items are returned, a warning is emitted and the array is returned as-is.</maml:para>
           </maml:description>
           <dev:type>
             <maml:name>SwitchParameter</maml:name>
@@ -460,11 +460,11 @@ Enable-MgxResilience   # Re-inject for the new connection</dev:code>
       <command:parameter required="true" variableLength="true" globbing="false" pipelineInput="True (ByValue)" position="named" aliases="none">
         <maml:name>InputObject</maml:name>
         <maml:description>
-          <maml:para>The object to enrich with related data. Accepts any PSObject from the pipeline. Must have a property matching -IdProperty (default: id) whose value is substituted into the -Uri template.</maml:para>
+          <maml:para>The object to enrich with related data. Accepts a Hashtable (such as the output of another Mgx cmdlet) or a PSCustomObject from the pipeline. Must have a member matching -IdProperty (default: id) whose value is substituted into the -Uri template. The relation is attached in the same shape the object arrived in.</maml:para>
         </maml:description>
-        <command:parameterValue required="true" variableLength="false">PSObject</command:parameterValue>
+        <command:parameterValue required="true" variableLength="false">Object</command:parameterValue>
         <dev:type>
-          <maml:name>PSObject</maml:name>
+          <maml:name>Object</maml:name>
           <maml:uri />
         </dev:type>
         <dev:defaultValue>None</dev:defaultValue>
@@ -496,7 +496,7 @@ Enable-MgxResilience   # Re-inject for the new connection</dev:code>
       <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
         <maml:name>Flatten</maml:name>
         <maml:description>
-          <maml:para>Unwrap single-value relations. When the endpoint returns exactly one item (or a singleton object like /manager), the result is attached as a single PSObject instead of a one-element array. If multiple items are returned, a warning is emitted and the array is returned as-is.</maml:para>
+          <maml:para>Unwrap single-value relations. When the endpoint returns exactly one item (or a singleton object like /manager), the result is attached as a single Hashtable instead of a one-element array. If multiple items are returned, a warning is emitted and the array is returned as-is.</maml:para>
         </maml:description>
         <command:parameterValue required="false" variableLength="false">SwitchParameter</command:parameterValue>
         <dev:type>
@@ -605,20 +605,20 @@ Enable-MgxResilience   # Re-inject for the new connection</dev:code>
     <command:inputTypes>
       <command:inputType>
         <dev:type>
-          <maml:name>System.Management.Automation.PSObject</maml:name>
+          <maml:name>System.Object</maml:name>
         </dev:type>
         <maml:description>
-          <maml:para>Any PSObject with a property matching -IdProperty (default: id).</maml:para>
+          <maml:para>A Hashtable or PSCustomObject with a member matching -IdProperty (default: id).</maml:para>
         </maml:description>
       </command:inputType>
     </command:inputTypes>
     <command:returnValues>
       <command:returnValue>
         <dev:type>
-          <maml:name>System.Management.Automation.PSObject</maml:name>
+          <maml:name>System.Collections.Hashtable</maml:name>
         </dev:type>
         <maml:description>
-          <maml:para>The input object with an additional property (named by -As) containing the relation data. Collection endpoints produce an array of PSObjects. Singleton endpoints produce a single PSObject when -Flatten is used, or a one-element array otherwise.</maml:para>
+          <maml:para>The input object with an additional member (named by -As) containing the relation data. Collection endpoints produce an array of Hashtables. Singleton endpoints produce a single Hashtable when -Flatten is used, or a one-element array otherwise. A PSCustomObject piped in is returned as a PSCustomObject.</maml:para>
         </maml:description>
       </command:returnValue>
     </command:returnValues>
@@ -644,7 +644,7 @@ Enable-MgxResilience   # Re-inject for the new connection</dev:code>
     Expand-MgxRelation -Uri '/users/{id}/manager' -As Manager -Flatten -SkipNotFound |
     Select-Object displayName, @{N='ManagerName'; E={$_.Manager.displayName}}</dev:code>
         <dev:remarks>
-          <maml:para>The /manager endpoint returns a single object, not a collection. -Flatten unwraps it from the array so Manager is a PSObject (not a one-element array). Users without a manager get $null.</maml:para>
+          <maml:para>The /manager endpoint returns a single object, not a collection. -Flatten unwraps it from the array so Manager is a Hashtable (not a one-element array). Users without a manager get $null.</maml:para>
         </dev:remarks>
       </command:example>
       <command:example>
@@ -1503,7 +1503,7 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
     <maml:description>
       <maml:para>Invoke-MgxBatchRequest bundles multiple Microsoft Graph API requests into /$batch calls, sending up to 20 requests per HTTP round-trip (the Graph API maximum). This is 3-4x faster than individual requests for bulk operations.</maml:para>
       <maml:para>Supports GET, POST, PATCH, PUT, and DELETE methods with optional request bodies. Auto-chunks input into 20-request batches.</maml:para>
-      <maml:para>Source: Combine multiple HTTP requests using JSON batching (https://learn.microsoft.com/en-us/graph/json-batching)Pipeline input can be string URLs (for GET, or combined with -Method/-Body for the same operation on all) or PSObjects with Url, Method, and Body properties for per-item control.</maml:para>
+      <maml:para>Source: Combine multiple HTTP requests using JSON batching (https://learn.microsoft.com/en-us/graph/json-batching)Pipeline input can be string URLs (for GET, or combined with -Method/-Body for the same operation on all) or Hashtables or PSObjects with Url, Method, and Body members for per-item control.</maml:para>
       <maml:para>Failed items are surfaced as PowerShell ErrorRecords. Use -ErrorAction Stop to halt on the first failure, or inspect $Error after completion.</maml:para>
     </maml:description>
     <command:syntax>
@@ -1512,7 +1512,7 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
         <command:parameter required="true" variableLength="true" globbing="false" pipelineInput="True (ByValue)" position="0" aliases="Url">
           <maml:name>Uri</maml:name>
           <maml:description>
-            <maml:para>Graph API URLs to batch. Accepts absolute URLs (https://graph.microsoft.com/v1.0/users/id) or relative URLs (/users/id). Also accepts PSObjects with Url, Method, and Body properties for per-item control.</maml:para>
+            <maml:para>Graph API URLs to batch. Accepts absolute URLs (https://graph.microsoft.com/v1.0/users/id) or relative URLs (/users/id). Also accepts Hashtables or PSObjects with Url, Method, and Body members for per-item control.</maml:para>
           </maml:description>
           <command:parameterValue required="true" variableLength="false">Object[]</command:parameterValue>
           <dev:type>
@@ -1540,7 +1540,7 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
         <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
           <maml:name>Body</maml:name>
           <maml:description>
-            <maml:para>Request body for all requests when piping string URLs. Ignored when pipeline input contains PSObjects with their own Body property.</maml:para>
+            <maml:para>Request body for all requests when piping string URLs. Ignored when pipeline input carries its own Body member.</maml:para>
           </maml:description>
           <command:parameterValue required="true" variableLength="false">Object</command:parameterValue>
           <dev:type>
@@ -1605,7 +1605,7 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
         <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
           <maml:name>Method</maml:name>
           <maml:description>
-            <maml:para>HTTP method for all requests when piping string URLs. Default: GET. Ignored when pipeline input contains PSObjects with their own Method property.</maml:para>
+            <maml:para>HTTP method for all requests when piping string URLs. Default: GET. Ignored when pipeline input carries its own Method member.</maml:para>
           </maml:description>
           <command:parameterValueGroup>
             <command:parameterValue required="false" command:variableLength="false">GET</command:parameterValue>
@@ -1662,7 +1662,7 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
       <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
         <maml:name>Body</maml:name>
         <maml:description>
-          <maml:para>Request body for all requests when piping string URLs. Ignored when pipeline input contains PSObjects with their own Body property.</maml:para>
+          <maml:para>Request body for all requests when piping string URLs. Ignored when pipeline input carries its own Body member.</maml:para>
         </maml:description>
         <command:parameterValue required="true" variableLength="false">Object</command:parameterValue>
         <dev:type>
@@ -1735,7 +1735,7 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
       <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
         <maml:name>Method</maml:name>
         <maml:description>
-          <maml:para>HTTP method for all requests when piping string URLs. Default: GET. Ignored when pipeline input contains PSObjects with their own Method property.</maml:para>
+          <maml:para>HTTP method for all requests when piping string URLs. Default: GET. Ignored when pipeline input carries its own Method member.</maml:para>
         </maml:description>
         <command:parameterValue required="true" variableLength="false">String</command:parameterValue>
         <dev:type>
@@ -1747,7 +1747,7 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
       <command:parameter required="true" variableLength="true" globbing="false" pipelineInput="True (ByValue)" position="0" aliases="Url">
         <maml:name>Uri</maml:name>
         <maml:description>
-          <maml:para>Graph API URLs to batch. Accepts absolute URLs (https://graph.microsoft.com/v1.0/users/id) or relative URLs (/users/id). Also accepts PSObjects with Url, Method, and Body properties for per-item control.</maml:para>
+          <maml:para>Graph API URLs to batch. Accepts absolute URLs (https://graph.microsoft.com/v1.0/users/id) or relative URLs (/users/id). Also accepts Hashtables or PSObjects with Url, Method, and Body members for per-item control.</maml:para>
         </maml:description>
         <command:parameterValue required="true" variableLength="false">Object[]</command:parameterValue>
         <dev:type>
@@ -1787,17 +1787,17 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
           <maml:name>System.Object[]</maml:name>
         </dev:type>
         <maml:description>
-          <maml:para>String URLs or PSObjects with Url, Method, and Body properties.</maml:para>
+          <maml:para>String URLs or Hashtables or PSObjects with Url, Method, and Body members.</maml:para>
         </maml:description>
       </command:inputType>
     </command:inputTypes>
     <command:returnValues>
       <command:returnValue>
         <dev:type>
-          <maml:name>System.Management.Automation.PSObject</maml:name>
+          <maml:name>System.Collections.Hashtable</maml:name>
         </dev:type>
         <maml:description>
-          <maml:para>Per-request results with Url, Status, and Body properties.</maml:para>
+          <maml:para>Per-request results with Url, Method, Status, and Body keys. Body is itself a Hashtable (or $null when the response had no body).</maml:para>
         </maml:description>
       </command:returnValue>
     </command:returnValues>
@@ -1931,7 +1931,7 @@ foreach ($url in $urls) { $url | Invoke-MgxBatchRequest }</dev:code>
     </command:details>
     <maml:description>
       <maml:para>Invoke-MgxRequest is a general-purpose resilient client for any Microsoft Graph endpoint. It supports streaming pagination, fan-out concurrency, write operations (POST, PATCH, PUT, DELETE), and checkpoint/resume.</maml:para>
-      <maml:para>Results are returned as PSObjects with properties matching the Graph API JSON response. DateTime strings are automatically parsed to DateTimeOffset, and @odata.type is preserved as an ODataType property.</maml:para>
+      <maml:para>Results are returned as case-insensitive Hashtables with keys matching the Graph API JSON response. DateTime strings are automatically parsed to DateTimeOffset, and @odata.type is preserved verbatim under its own name.</maml:para>
       <maml:para>For bulk writes involving more than 10 items, consider using Invoke-MgxBatchRequest instead, which is 3-4x faster due to fewer HTTP round-trips.</maml:para>
     </maml:description>
     <command:syntax>
@@ -2152,7 +2152,7 @@ foreach ($url in $urls) { $url | Invoke-MgxBatchRequest }</dev:code>
         <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
           <maml:name>Raw</maml:name>
           <maml:description>
-            <maml:para>Return raw JSON strings instead of PSObjects. Useful for piping to ConvertFrom-Json or writing to files.</maml:para>
+            <maml:para>Return raw JSON strings instead of Hashtables. Useful for piping to ConvertFrom-Json or writing to files.</maml:para>
           </maml:description>
           <dev:type>
             <maml:name>SwitchParameter</maml:name>
@@ -2451,7 +2451,7 @@ foreach ($url in $urls) { $url | Invoke-MgxBatchRequest }</dev:code>
       <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
         <maml:name>Raw</maml:name>
         <maml:description>
-          <maml:para>Return raw JSON strings instead of PSObjects. Useful for piping to ConvertFrom-Json or writing to files.</maml:para>
+          <maml:para>Return raw JSON strings instead of Hashtables. Useful for piping to ConvertFrom-Json or writing to files.</maml:para>
         </maml:description>
         <command:parameterValue required="false" variableLength="false">SwitchParameter</command:parameterValue>
         <dev:type>
@@ -2572,20 +2572,20 @@ foreach ($url in $urls) { $url | Invoke-MgxBatchRequest }</dev:code>
     <command:inputTypes>
       <command:inputType>
         <dev:type>
-          <maml:name>System.String</maml:name>
+          <maml:name>System.Object</maml:name>
         </dev:type>
         <maml:description>
-          <maml:para>Pipeline input for fan-out operations. Each string value replaces {id} in the URI template.</maml:para>
+          <maml:para>Pipeline input for fan-out operations. Accepts a bare entity ID string, or an object with an id member (a Hashtable, such as the output of another Mgx cmdlet, or a PSCustomObject). The resolved ID replaces {id} in the URI template.</maml:para>
         </maml:description>
       </command:inputType>
     </command:inputTypes>
     <command:returnValues>
       <command:returnValue>
         <dev:type>
-          <maml:name>System.Management.Automation.PSObject</maml:name>
+          <maml:name>System.Collections.Hashtable</maml:name>
         </dev:type>
         <maml:description>
-          <maml:para>Graph API response objects with properties matching the JSON fields.</maml:para>
+          <maml:para>Graph API response objects as case-insensitive Hashtables with keys matching the JSON fields.</maml:para>
         </maml:description>
       </command:returnValue>
       <command:returnValue>
@@ -3442,10 +3442,10 @@ Import-Csv ./users.csv |
     <command:returnValues>
       <command:returnValue>
         <dev:type>
-          <maml:name>System.Management.Automation.PSObject</maml:name>
+          <maml:name>System.Collections.Hashtable</maml:name>
         </dev:type>
         <maml:description>
-          <maml:para>Graph API objects with properties matching the JSON fields. Deleted items include an `@removed` property.</maml:para>
+          <maml:para>Graph API objects as case-insensitive Hashtables with keys matching the JSON fields. Deleted items include an `@removed` key.</maml:para>
         </maml:description>
       </command:returnValue>
     </command:returnValues>

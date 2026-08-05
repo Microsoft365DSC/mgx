@@ -8,30 +8,33 @@ schema: 2.0.0
 # Invoke-MgxBatchRequest
 
 ## SYNOPSIS
+
 Bundle multiple Graph API requests into /$batch calls.
 
 ## SYNTAX
 
-```
+```text
 Invoke-MgxBatchRequest [-Uri] <Object[]> [-Method <String>] [-Body <Object>] [-ConsistencyLevel <String>]
  [-Headers <Hashtable>] [-ThrottlePriority <String>] [-ApiVersion <String>] [-ProgressAction <ActionPreference>]
  [-WhatIf] [-Confirm] [<CommonParameters>]
 ```
 
 ## DESCRIPTION
+
 Invoke-MgxBatchRequest bundles multiple Microsoft Graph API requests into /$batch calls, sending up to 20 requests per HTTP round-trip (the Graph API maximum). This is 3-4x faster than individual requests for bulk operations.
 
 Supports GET, POST, PATCH, PUT, and DELETE methods with optional request bodies. Auto-chunks input into 20-request batches.
 
 Source: [Combine multiple HTTP requests using JSON batching](https://learn.microsoft.com/en-us/graph/json-batching)
 
-Pipeline input can be string URLs (for GET, or combined with -Method/-Body for the same operation on all) or PSObjects with Url, Method, and Body properties for per-item control.
+Pipeline input can be string URLs (for GET, or combined with -Method/-Body for the same operation on all) or Hashtables or PSObjects with Url, Method, and Body members for per-item control.
 
 Failed items are surfaced as PowerShell ErrorRecords. Use -ErrorAction Stop to halt on the first failure, or inspect $Error after completion.
 
 ## EXAMPLES
 
 ### Example 1: Batch GET multiple users
+
 ```powershell
 @("/users/id1", "/users/id2", "/users/id3") | Invoke-MgxBatchRequest
 ```
@@ -39,6 +42,7 @@ Failed items are surfaced as PowerShell ErrorRecords. Use -ErrorAction Stop to h
 Retrieves three users in a single HTTP round-trip.
 
 ### Example 2: Batch POST to create multiple entities
+
 ```powershell
 $requests = 1..100 | ForEach-Object {
     [PSCustomObject]@{
@@ -59,6 +63,7 @@ $requests | Invoke-MgxBatchRequest
 Creates 100 users in 5 batches of 20. Each result includes Url, Status, and Body properties.
 
 ### Example 3: Batch PATCH with shared body
+
 ```powershell
 @("/users/id1", "/users/id2") | Invoke-MgxBatchRequest -Method PATCH -Body @{ department = "HR" }
 ```
@@ -66,6 +71,7 @@ Creates 100 users in 5 batches of 20. Each result includes Url, Status, and Body
 Updates the department for two users in a single batch call.
 
 ### Example 4: Batch DELETE multiple entities
+
 ```powershell
 # Delete all decommissioned users in batches of 20
 $users = Invoke-MgxRequest /users -Filter "department eq 'Decommissioned'" -All -Property id
@@ -81,6 +87,7 @@ $users | ForEach-Object { "/users/$($_.id)" } | Invoke-MgxBatchRequest -Method D
 Deletes all matching users in batches of 20. Failed items (e.g., 404 for already-deleted) are emitted as ErrorRecords. Use `-ErrorAction SilentlyContinue` to suppress expected 404s during cleanup.
 
 ### Example 5: Deprioritize background cleanup under throttling
+
 ```powershell
 $staleGroups | ForEach-Object { "/groups/$($_.id)" } |
     Invoke-MgxBatchRequest -Method DELETE -ThrottlePriority Low -ErrorAction SilentlyContinue
@@ -98,6 +105,7 @@ Sets `x-ms-throttle-priority: Low` on each batch item, telling Graph to throttle
 Passes custom headers to each individual batch item. Headers are merged with -ConsistencyLevel (if specified).
 
 ### Example 7: Search with ConsistencyLevel
+
 ```powershell
 @('/users?$search="displayName:John"', '/groups?$search="displayName:Sales"') |
     Invoke-MgxBatchRequest -ConsistencyLevel eventual
@@ -106,6 +114,7 @@ Passes custom headers to each individual batch item. Headers are merged with -Co
 Batches search queries that require the ConsistencyLevel header.
 
 ### Example 8: Capture failures to a dead-letter file
+
 ```powershell
 1..1000 | ForEach-Object {
     [PSCustomObject]@{ Url = "/users"; Method = "POST"; Body = @{ displayName = "User-$_"; mailNickname = "user$_"; userPrincipalName = "user$_@contoso.com"; passwordProfile = @{ password = "P@ss$(Get-Random -Minimum 10000)!" } } }
@@ -115,6 +124,7 @@ Batches search queries that require the ConsistencyLevel header.
 Creates 1000 users via batch. Any failures (status >= 400) are appended to the JSONL dead-letter file with Url, Method, Body (passwords redacted), Status, and Error. Sensitive fields like passwordProfile are automatically replaced with ***REDACTED***.
 
 ### Example 9: Pipeline usage at scale (recommended pattern)
+
 ```powershell
 # Correct: pipe all items into one call
 $urls = 1..10000 | ForEach-Object { "/users/$_" }
@@ -129,6 +139,7 @@ Always pipe all items into a single Invoke-MgxBatchRequest call. This is both fa
 ## PARAMETERS
 
 ### -ApiVersion
+
 Graph API version. Default: v1.0. Use "beta" for preview endpoints.
 
 ```yaml
@@ -145,7 +156,8 @@ Accept wildcard characters: False
 ```
 
 ### -Body
-Request body for all requests when piping string URLs. Ignored when pipeline input contains PSObjects with their own Body property.
+
+Request body for all requests when piping string URLs. Ignored when pipeline input carries its own Body member.
 
 ```yaml
 Type: Object
@@ -160,6 +172,7 @@ Accept wildcard characters: False
 ```
 
 ### -DeadLetterPath
+
 Path to a JSONL file where failed batch items (status >= 400) are appended. Each line contains Url, Method, Body (with sensitive fields redacted), Status, Error, and Timestamp. The file can be re-piped to Invoke-MgxBatchRequest for retry: `Get-Content dead.jsonl | ConvertFrom-Json | Invoke-MgxBatchRequest`.
 
 ```yaml
@@ -175,6 +188,7 @@ Accept wildcard characters: False
 ```
 
 ### -Confirm
+
 Prompts you for confirmation before running the cmdlet.
 
 ```yaml
@@ -190,9 +204,11 @@ Accept wildcard characters: False
 ```
 
 ### -ConsistencyLevel
+
 ConsistencyLevel header added to each individual batch item. Required when any batch item URL contains $search (Graph advanced query capabilities). Takes precedence over the same key in -Headers. Source: [Advanced query capabilities on Microsoft Entra ID objects](https://learn.microsoft.com/en-us/graph/aad-advanced-queries)
 
 ### -Headers
+
 Custom headers applied to each individual batch item. Accepts a hashtable of key-value pairs. Merged with -ConsistencyLevel and -ThrottlePriority (dedicated parameters take precedence over matching keys in -Headers).
 
 ```yaml
@@ -208,6 +224,7 @@ Accept wildcard characters: False
 ```
 
 ### -ThrottlePriority
+
 Throttle priority hint for Graph API. Graph uses this to decide which requests to throttle first under pressure. Valid values: Low, Normal, High.
 
 Sets `x-ms-throttle-priority` header on each batch item. Use `Low` for background jobs that should yield to interactive workloads.
@@ -238,7 +255,8 @@ Accept wildcard characters: False
 ```
 
 ### -Method
-HTTP method for all requests when piping string URLs. Default: GET. Ignored when pipeline input contains PSObjects with their own Method property.
+
+HTTP method for all requests when piping string URLs. Default: GET. Ignored when pipeline input carries its own Method member.
 
 ```yaml
 Type: String
@@ -254,7 +272,8 @@ Accept wildcard characters: False
 ```
 
 ### -Uri
-Graph API URLs to batch. Accepts absolute URLs (https://graph.microsoft.com/v1.0/users/id) or relative URLs (/users/id). Also accepts PSObjects with Url, Method, and Body properties for per-item control.
+
+Graph API URLs to batch. Accepts absolute URLs (https://graph.microsoft.com/v1.0/users/id) or relative URLs (/users/id). Also accepts Hashtables or PSObjects with Url, Method, and Body members for per-item control.
 
 ```yaml
 Type: Object[]
@@ -269,6 +288,7 @@ Accept wildcard characters: False
 ```
 
 ### -WhatIf
+
 Shows what would happen if the cmdlet runs. The cmdlet is not run.
 
 ```yaml
@@ -284,6 +304,7 @@ Accept wildcard characters: False
 ```
 
 ### -ProgressAction
+
 Determines how the cmdlet responds to progress updates.
 
 ```yaml
@@ -299,19 +320,23 @@ Accept wildcard characters: False
 ```
 
 ### CommonParameters
+
 This cmdlet supports the common parameters: -Debug, -ErrorAction, -ErrorVariable, -InformationAction, -InformationVariable, -OutVariable, -OutBuffer, -PipelineVariable, -Verbose, -WarningAction, and -WarningVariable. For more information, see [about_CommonParameters](http://go.microsoft.com/fwlink/?LinkID=113216).
 
 ## INPUTS
 
 ### System.Object[]
-String URLs or PSObjects with Url, Method, and Body properties.
+
+String URLs, or Hashtables or PSObjects with Url, Method, and Body members.
 
 ## OUTPUTS
 
-### System.Management.Automation.PSObject
-Per-request results with Url, Status, and Body properties.
+### System.Collections.Hashtable
+
+Per-request results with Url, Method, Status, and Body keys. Body is itself a Hashtable (or $null when the response had no body).
 
 ## NOTES
+
 Each batch item is retried individually on 429 (throttled) or 5xx errors (for idempotent methods). POST requests only retry on 429 because POST is non-idempotent - retrying a failed POST on 5xx could create duplicates if the server processed the request before the error. This matches the Kiota SDK retry behavior. Source: [Microsoft Graph error responses and resource types](https://learn.microsoft.com/en-us/graph/errors)
 
 Items that exhaust per-chunk retries get one additional batch-level retry pass.
@@ -323,5 +348,6 @@ Batching reduces HTTP round-trips (20 operations per request instead of 1), but 
 For best performance and stability, always pipe all items into a single Invoke-MgxBatchRequest call rather than calling it in a loop. At 200+ rapid invocations per second, PowerShell's internal pipeline thread safety can race between cmdlet instances. Piping all items into one call avoids this entirely and is significantly faster.
 
 ## RELATED LINKS
+
 [Invoke-MgxRequest](Invoke-MgxRequest.md)
 [Set-MgxOption](Set-MgxOption.md)
