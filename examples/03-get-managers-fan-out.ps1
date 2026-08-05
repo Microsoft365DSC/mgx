@@ -7,7 +7,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "User.Read.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 # Get all users first, then fan-out to fetch each manager concurrently.
 $users = Invoke-MgxRequest /users -All -Property id,displayName

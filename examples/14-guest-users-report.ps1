@@ -5,7 +5,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "User.Read.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 $guests = Invoke-MgxRequest /users `
     -All `

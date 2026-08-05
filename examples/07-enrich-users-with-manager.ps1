@@ -6,7 +6,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "User.Read.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 Invoke-MgxRequest /users -Top 50 -Property id,displayName,mail |
     Expand-MgxRelation '/users/{id}/manager' -As Manager -Flatten -SkipNotFound |

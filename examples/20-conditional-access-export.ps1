@@ -5,7 +5,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "Policy.Read.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 $policies = Invoke-MgxRequest /identity/conditionalAccess/policies `
     -All `

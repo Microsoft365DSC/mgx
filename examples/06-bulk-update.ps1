@@ -8,7 +8,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "User.ReadWrite.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 # Replace these with real user IDs from your tenant.
 $userIds = @(

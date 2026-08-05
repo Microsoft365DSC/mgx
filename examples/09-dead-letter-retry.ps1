@@ -6,7 +6,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "User.ReadWrite.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 $deadLetterFile = "./failed-users.jsonl"
 $domain         = "contoso.com"  # replace with your tenant domain

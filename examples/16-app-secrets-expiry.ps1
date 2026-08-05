@@ -6,7 +6,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "Application.Read.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 $warningDate = (Get-Date).AddDays(30)
 

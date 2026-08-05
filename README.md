@@ -5,7 +5,7 @@ SDK cmdlets like `Get-MgUser -All` buffer every page in memory, have no retry, n
 ## Quick start
 
 ```powershell
-Install-Module Mgx
+Install-Module M365DSC.mgx
 Connect-MgGraph -Scopes "User.Read.All"
 Invoke-MgxRequest /users -All -Property displayName,mail
 ```

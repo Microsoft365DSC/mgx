@@ -6,7 +6,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "User.Read.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 Invoke-MgxRequest /users -All -Property displayName,mail,department,jobTitle |
     Format-Table displayName, mail, department, jobTitle -AutoSize
