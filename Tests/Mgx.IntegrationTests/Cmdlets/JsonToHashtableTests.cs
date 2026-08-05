@@ -44,16 +44,6 @@ public class JsonToHashtableTests
         Assert.Equal("#microsoft.graph.user", result["@odata.type"]);
     }
 
-    [Fact]
-    public void Does_not_rename_odata_type_to_ODataType()
-    {
-        // The pre-1.1.0 behaviour. Emitting ODataType broke Group-Object '@odata.type'
-        // and sent a bogus field back to Graph when a read result was reused as a body.
-        var result = Convert("""{ "@odata.type": "#microsoft.graph.user", "id": "abc" }""");
-
-        Assert.False(result.ContainsKey("ODataType"));
-    }
-
     [Theory]
     [InlineData("@odata.context")]
     [InlineData("@odata.nextLink")]

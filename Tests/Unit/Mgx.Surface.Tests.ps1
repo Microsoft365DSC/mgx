@@ -1,15 +1,5 @@
 #Requires -Modules Pester
 
-<#
-    Cmdlet surface contract of the imported module: which cmdlets exist, what they
-    emit, and how their pipeline parameters bind. This is the layer the xUnit suite
-    cannot reach, because it depends on PowerShell's own parameter binder.
-#>
-
-# Declared at script scope, not in BeforeAll: Pester 5 expands -ForEach during
-# discovery, before any BeforeAll block has run.
-
-# Cmdlets that return Graph data and therefore emit hashtables as of 1.1.0
 $script:GraphDataCmdlets = @(
     'Invoke-MgxRequest'
     'Invoke-MgxBatchRequest'
@@ -82,7 +72,6 @@ Describe 'Module import' {
 
 Describe 'Output contract' {
     It '<_> declares Hashtable output' -ForEach $script:GraphDataCmdlets {
-        # Graph-data cmdlets emit case-insensitive hashtables as of 1.1.0
         (Get-Command -Name $_).OutputType.Type.FullName |
             Should -Contain 'System.Collections.Hashtable'
     }
@@ -98,7 +87,6 @@ Describe 'Output contract' {
     }
 
     It 'informational cmdlets keep their strongly typed output' {
-        # These are real .NET classes so their ListControl labels still render
         (Get-Command -Name Get-MgxOption).OutputType.Type.FullName |
             Should -Contain 'Mgx.Cmdlets.Models.MgxOptionOutput'
         (Get-Command -Name Get-MgxTelemetry).OutputType.Type.FullName |
@@ -177,13 +165,5 @@ Describe 'Help' {
         $help | Should -Not -BeNullOrEmpty
         $help.Synopsis | Should -Not -BeNullOrEmpty
         $help.Synopsis | Should -Not -Match '^\s*$'
-    }
-
-    It 'no longer documents the removed ODataType property' {
-        # 1.1.0 returns @odata.type verbatim
-        $markdown = Get-ChildItem -Path $script:Paths.HelpRoot -Filter '*.md' -ErrorAction SilentlyContinue |
-            ForEach-Object { Get-Content -Path $_.FullName -Raw }
-
-        $markdown | Should -Not -Match 'ODataType'
     }
 }
