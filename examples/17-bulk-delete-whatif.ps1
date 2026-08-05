@@ -8,7 +8,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "User.ReadWrite.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 $cutoff = (Get-Date).AddDays(-180).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
 

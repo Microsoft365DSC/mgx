@@ -305,7 +305,7 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
     /// - String: use as URL with shared -Method/-Body parameters
     /// - Hashtable or PSObject with a Url member: use per-item Url/Method/Body
     /// </summary>
-    private BatchInput? ParsePipelineInput(object item)
+    internal BatchInput? ParsePipelineInput(object item)
     {
         var value = UnwrapPSObject(item);
 
@@ -457,5 +457,5 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
         }
     }
 
-    private sealed record BatchInput(string Url, string Method, object? Body);
+    internal sealed record BatchInput(string Url, string Method, object? Body);
 }

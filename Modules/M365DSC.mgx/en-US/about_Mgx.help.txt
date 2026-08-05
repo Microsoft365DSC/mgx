@@ -132,13 +132,13 @@ EXAMPLES
     Example 1: List all users with streaming pagination
 
         Connect-MgGraph -Scopes "User.Read.All"
-        Import-Module Mgx
+        Import-Module M365DSC.mgx
         Invoke-MgxRequest /users -All -Property displayName,mail
 
     Example 2: Add resilience to existing Microsoft.Graph scripts
 
         Connect-MgGraph -Scopes "User.Read.All"
-        Import-Module Mgx
+        Import-Module M365DSC.mgx
         Enable-MgxResilience
         Get-MgUser -All    # now retries on 429/5xx automatically
 

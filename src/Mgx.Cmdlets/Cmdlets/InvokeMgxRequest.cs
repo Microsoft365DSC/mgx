@@ -196,7 +196,7 @@ public class InvokeMgxRequest : MgxCmdletBase
     /// Extract the entity ID from pipeline input: a bare string, or the 'id' member of a
     /// Hashtable / PSCustomObject.
     /// </summary>
-    private static string? ResolvePipelineId(object input)
+    internal static string? ResolvePipelineId(object input)
     {
         var value = UnwrapPSObject(input);
 

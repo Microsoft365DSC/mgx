@@ -1,9 +1,10 @@
 # Changelog
 
-## 1.0.3
+## 1.1.0
 
 **Breaking changes.**
 
+- **BREAKING:** The module is now published as `M365DSC.mgx` instead of `mgx`. Install with `Install-Module M365DSC.mgx` and import with `Import-Module M365DSC.mgx`. The manifest, root module, and format file were renamed to match. Cmdlet names are unchanged (`Invoke-MgxRequest`, `Get-MgxTelemetry`, ...), so only the install/import lines in existing scripts need updating.
 - **BREAKING:** `Invoke-MgxRequest`, `Invoke-MgxBatchRequest`, `Expand-MgxRelation`, and `Sync-MgxDelta` now emit case-insensitive `Hashtable`s instead of PSObjects, so results work directly with `-is [hashtable]`, `.ContainsKey()`, and splatting. Two consequences:
   - Graph property order is no longer preserved (a `Hashtable` is unordered).
   - The `Mgx.User`, `Mgx.Group`, `Mgx.Application`, `Mgx.ServicePrincipal`, `Mgx.DirectoryRole`, and `Mgx.BatchResult` table views were removed. PowerShell always renders an `IDictionary` with the built-in Name/Value view, so a custom view can never be selected. Use `Format-Table` or `Select-Object` explicitly to pick columns.

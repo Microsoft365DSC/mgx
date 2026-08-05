@@ -466,7 +466,7 @@ public abstract class MgxCmdletBase : PSCmdlet, IDisposable
     /// <summary>
     /// Convert a JsonElement to a Hashtable with all properties preserved.
     /// </summary>
-    protected static Hashtable JsonToHashtable(JsonElement element)
+    protected internal static Hashtable JsonToHashtable(JsonElement element)
     {
         // OrdinalIgnoreCase matches PowerShell's @{} literal, so member access stays
         // case-insensitive ($user.DisplayName resolves the camelCase 'displayName' key).
@@ -499,7 +499,7 @@ public abstract class MgxCmdletBase : PSCmdlet, IDisposable
     /// PSCustomObject is returned as its PSObject: its members live on the PSObject,
     /// and its BaseObject is an empty PSCustomObject marker that carries nothing.
     /// </summary>
-    protected static object UnwrapPSObject(object input) =>
+    protected internal static object UnwrapPSObject(object input) =>
         input is PSObject pso && pso.BaseObject is not PSObject and not PSCustomObject
             ? pso.BaseObject
             : input;
@@ -508,7 +508,7 @@ public abstract class MgxCmdletBase : PSCmdlet, IDisposable
     /// Read a named member from pipeline input, whether it is a Hashtable (what the
     /// Graph cmdlets emit), a PSObject-wrapped dictionary, or a PSCustomObject.
     /// </summary>
-    protected static object? TryGetMember(object? input, string name)
+    protected internal static object? TryGetMember(object? input, string name)
     {
         if (input is PSObject wrapper && wrapper.BaseObject is IDictionary baseDict)
             return baseDict[name];
@@ -533,7 +533,9 @@ public abstract class MgxCmdletBase : PSCmdlet, IDisposable
 
         return element.ValueKind switch
         {
-            JsonValueKind.Number => element.TryGetInt64(out var l) ? l : element.GetDouble(),
+            // The (object) cast is required: without it the conditional unifies to double,
+            // widening every integer and losing precision beyond 2^53.
+            JsonValueKind.Number => element.TryGetInt64(out var l) ? (object)l : element.GetDouble(),
             JsonValueKind.True => true,
             JsonValueKind.False => false,
             JsonValueKind.Null => null,

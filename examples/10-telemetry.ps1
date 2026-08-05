@@ -6,7 +6,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "User.Read.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 # Run some operations
 $users = Invoke-MgxRequest /users -All -Property id,displayName
