@@ -1,6 +1,6 @@
 # ignore
+.vs/
 .vscode/
-.github/
 .DS_Store
 
 # tmp
@@ -12,8 +12,13 @@ publish/
 *.zip
 
 # Build output
-module/*.dll
-module/*.pdb
-module/*.json
-module/Dependencies/
-module/.build-hash
+Modules/M365DSC.mgx/*.dll
+Modules/M365DSC.mgx/*.pdb
+Modules/M365DSC.mgx/*.json
+Modules/M365DSC.mgx/Dependencies/
+Modules/M365DSC.mgx/.build-hash
+
+# Test output
+TestResults/
+Tests/TestResults.xml
+*.trx

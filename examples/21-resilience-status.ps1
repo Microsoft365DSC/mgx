@@ -7,7 +7,7 @@
 # Requirements: Connect-MgGraph -Scopes "User.Read.All"
 
 Import-Module Microsoft.Graph.Users
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 # Check current state - not injected yet
 Get-MgxResilience

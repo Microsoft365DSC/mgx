@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Management.Automation;
 using System.Net;
 using System.Text;
@@ -17,7 +18,7 @@ namespace Mgx.Cmdlets.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "MgxRequest", DefaultParameterSetName = "Direct",
     SupportsShouldProcess = true)]
-[OutputType(typeof(PSObject), typeof(string))]
+[OutputType(typeof(Hashtable), typeof(string))]
 public class InvokeMgxRequest : MgxCmdletBase
 {
     #region Common parameters
@@ -99,9 +100,13 @@ public class InvokeMgxRequest : MgxCmdletBase
 
     #region Fan-out parameters
 
-    [Parameter(ValueFromPipeline = true, ValueFromPipelineByPropertyName = true, ParameterSetName = "Pipeline")]
+    /// <summary>
+    /// Entity ID, or an object carrying one. Accepts a plain string, a Hashtable (what the
+    /// Mgx cmdlets emit), or a PSCustomObject; the 'id' member is extracted in ProcessRecord.
+    /// </summary>
+    [Parameter(ValueFromPipeline = true, ParameterSetName = "Pipeline")]
     [Alias("Id")]
-    public string? InputObject { get; set; }
+    public object? InputObject { get; set; }
 
     [Parameter(ParameterSetName = "Pipeline")]
     [ValidateRange(1, 128)]
@@ -168,12 +173,37 @@ public class InvokeMgxRequest : MgxCmdletBase
                 WriteVerbose("Skipping null pipeline input.");
                 return;
             }
-            _pipelineIds.Add(InputObject);
+
+            var id = ResolvePipelineId(InputObject);
+            if (string.IsNullOrEmpty(id))
+            {
+                WriteError(new ErrorRecord(
+                    new ArgumentException(
+                        "Pipeline input is missing an 'id' property. Pipe entity IDs, or objects with an 'id' property."),
+                    "MissingPipelineId", ErrorCategory.InvalidArgument, InputObject));
+                return;
+            }
+
+            _pipelineIds.Add(id);
             return;
         }
 
         // Direct mode (no fan-out): execute immediately
         ExecuteRequest(Uri, sourceId: null);
+    }
+
+    /// <summary>
+    /// Extract the entity ID from pipeline input: a bare string, or the 'id' member of a
+    /// Hashtable / PSCustomObject.
+    /// </summary>
+    internal static string? ResolvePipelineId(object input)
+    {
+        var value = UnwrapPSObject(input);
+
+        if (value is string s)
+            return s;
+
+        return TryGetMember(value, "id")?.ToString();
     }
 
     protected override void EndProcessing()
@@ -917,25 +947,23 @@ public class InvokeMgxRequest : MgxCmdletBase
             return;
         }
 
-        var pso = JsonToPSObject(element);
+        var ht = JsonToHashtable(element);
 
         if (sourceId != null)
         {
             // Use unique prefix to avoid collision with Graph entity properties
-            const string propName = "_MgxSourceId";
-            if (pso.Properties[propName] != null)
-                pso.Properties.Remove(propName);
-            pso.Properties.Add(new PSNoteProperty(propName, sourceId));
+            ht["_MgxSourceId"] = sourceId;
         }
 
-        WriteObject(pso);
+        // Single-argument WriteObject does not enumerate, so the Hashtable is emitted whole
+        WriteObject(ht);
     }
 
     internal static string SerializeBody(object body)
     {
         if (body is string s) return s;
         if (body is PSObject pso) return JsonSerializer.Serialize(PSOToDict(pso));
-        if (body is System.Collections.Hashtable ht) return JsonSerializer.Serialize(HashtableToDict(ht));
+        if (body is IDictionary dict) return JsonSerializer.Serialize(DictionaryToDict(dict));
         // Handle array body (e.g., object[] from PowerShell)
         if (body is object[] arr) return JsonSerializer.Serialize(arr.Select(UnwrapValue).ToArray());
         return JsonSerializer.Serialize(body);
@@ -952,31 +980,32 @@ public class InvokeMgxRequest : MgxCmdletBase
         return dict;
     }
 
-    internal static Dictionary<string, object?> HashtableToDict(System.Collections.Hashtable ht)
+    /// <summary>
+    /// Flatten any IDictionary (Hashtable, ordered dictionary, or the Hashtables the Mgx
+    /// cmdlets emit) into a serializable dictionary, unwrapping nested PowerShell values.
+    /// </summary>
+    internal static Dictionary<string, object?> DictionaryToDict(IDictionary source)
     {
         var dict = new Dictionary<string, object?>();
-        foreach (System.Collections.DictionaryEntry entry in ht)
+        foreach (DictionaryEntry entry in source)
             dict[entry.Key.ToString()!] = UnwrapValue(entry.Value);
         return dict;
     }
 
     /// <summary>
     /// Unwraps a PowerShell value to its underlying .NET representation.
-    /// PSCustomObject's BaseObject is the PSObject itself - check for NoteProperty members
-    /// rather than the BaseObject type to correctly identify and recurse into PS objects.
+    /// A PSCustomObject keeps its members on the PSObject (its BaseObject is an empty
+    /// marker), so it must be read through PSOToDict rather than its BaseObject.
     /// </summary>
     internal static object? UnwrapValue(object? value)
     {
         if (value is PSObject pso)
         {
-            // If BaseObject is a raw .NET type (not a PSObject itself), unwrap it
-            if (pso.BaseObject != null && pso.BaseObject is not PSObject)
-                return UnwrapValue(pso.BaseObject);
-            // PSCustomObject: recurse into its properties
-            return PSOToDict(pso);
+            var unwrapped = UnwrapPSObject(pso);
+            return ReferenceEquals(unwrapped, pso) ? PSOToDict(pso) : UnwrapValue(unwrapped);
         }
-        if (value is System.Collections.Hashtable ht)
-            return HashtableToDict(ht);
+        if (value is IDictionary dict)
+            return DictionaryToDict(dict);
         if (value is object[] arr)
             return arr.Select(UnwrapValue).ToArray();
         return value;

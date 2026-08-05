@@ -6,7 +6,7 @@
 # Requirements: Connect-MgGraph -Scopes "User.Read.All"
 
 Import-Module Microsoft.Graph.Users
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 $property = "id,displayName,mail,department,jobTitle,accountEnabled"
 $selectArr = @("id","displayName","mail","department","jobTitle","accountEnabled")

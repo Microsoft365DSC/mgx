@@ -7,7 +7,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "AuditLog.Read.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 $outputFile     = "./signins.jsonl"
 $checkpointFile = "./signins-checkpoint.json"

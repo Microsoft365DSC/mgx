@@ -6,7 +6,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "Group.Read.All", "User.Read.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 # Get all groups, then stream all members from all groups concurrently
 $allMembers = Invoke-MgxRequest /groups -All -Property id,displayName |

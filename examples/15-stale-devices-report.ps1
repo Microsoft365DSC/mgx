@@ -5,7 +5,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "Device.Read.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 $cutoff = (Get-Date).AddDays(-90).ToString("yyyy-MM-ddTHH:mm:ssZ")
 

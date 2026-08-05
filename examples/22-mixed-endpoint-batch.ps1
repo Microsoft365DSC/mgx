@@ -6,7 +6,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "User.Read.All", "Group.Read.All", "Application.Read.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 # Mixed GET: pull a snapshot from four different endpoints at once
 $results = @(

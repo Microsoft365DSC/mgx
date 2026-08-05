@@ -1,0 +1,289 @@
+using System.Collections;
+using System.Collections.Specialized;
+using System.Management.Automation;
+using System.Text.Json;
+using Mgx.Cmdlets.Base;
+using Mgx.Cmdlets.Cmdlets;
+using Mgx.Cmdlets.Cmdlets.Batch;
+
+namespace Mgx.IntegrationTests.Cmdlets;
+
+/// <summary>
+/// Since the cmdlets emit Hashtables, every place that reads members off pipeline input
+/// has to handle dictionaries as well as PSCustomObjects. PowerShell will not do this
+/// automatically: ValueFromPipelineByPropertyName does not see dictionary keys, and
+/// PSObject.Properties is empty for a hashtable-backed PSObject.
+/// </summary>
+public class PipelineContractTests
+{
+    private static PSObject PSCustomObject(params (string Name, object? Value)[] members)
+    {
+        var pso = new PSObject();
+        foreach (var (name, value) in members)
+            pso.Properties.Add(new PSNoteProperty(name, value));
+        return pso;
+    }
+
+    #region TryGetMember / UnwrapPSObject
+
+    [Fact]
+    public void TryGetMember_reads_hashtable_keys()
+    {
+        var input = new Hashtable(StringComparer.OrdinalIgnoreCase) { ["id"] = "abc" };
+
+        Assert.Equal("abc", MgxCmdletBase.TryGetMember(input, "id"));
+    }
+
+    [Fact]
+    public void TryGetMember_reads_keys_of_a_PSObject_wrapped_hashtable()
+    {
+        // PowerShell wraps pipeline objects in a PSObject before binding
+        var wrapped = PSObject.AsPSObject(
+            new Hashtable(StringComparer.OrdinalIgnoreCase) { ["id"] = "abc" });
+
+        Assert.Equal("abc", MgxCmdletBase.TryGetMember(wrapped, "id"));
+    }
+
+    [Fact]
+    public void TryGetMember_reads_PSCustomObject_note_properties()
+    {
+        Assert.Equal("abc", MgxCmdletBase.TryGetMember(PSCustomObject(("id", "abc")), "id"));
+    }
+
+    [Fact]
+    public void TryGetMember_reads_ordered_dictionaries()
+    {
+        var ordered = new OrderedDictionary { ["id"] = "abc" };
+
+        Assert.Equal("abc", MgxCmdletBase.TryGetMember(ordered, "id"));
+    }
+
+    [Fact]
+    public void TryGetMember_returns_null_for_absent_members_and_null_input()
+    {
+        Assert.Null(MgxCmdletBase.TryGetMember(new Hashtable(), "id"));
+        Assert.Null(MgxCmdletBase.TryGetMember(PSCustomObject(("name", "x")), "id"));
+        Assert.Null(MgxCmdletBase.TryGetMember(null, "id"));
+        Assert.Null(MgxCmdletBase.TryGetMember(42, "id"));
+    }
+
+    [Fact]
+    public void UnwrapPSObject_unwraps_real_dotnet_values_but_keeps_PSCustomObject()
+    {
+        var hashtable = new Hashtable();
+        Assert.Same(hashtable, MgxCmdletBase.UnwrapPSObject(PSObject.AsPSObject(hashtable)));
+        Assert.Equal("plain", MgxCmdletBase.UnwrapPSObject(PSObject.AsPSObject("plain")));
+
+        // A PSCustomObject keeps its members on the PSObject; its BaseObject is an
+        // empty marker, so unwrapping it would discard everything.
+        var pso = PSCustomObject(("id", "abc"));
+        Assert.Same(pso, MgxCmdletBase.UnwrapPSObject(pso));
+    }
+
+    #endregion
+
+    #region Invoke-MgxRequest fan-out input
+
+    [Fact]
+    public void ResolvePipelineId_accepts_a_bare_id_string()
+    {
+        Assert.Equal("abc", InvokeMgxRequest.ResolvePipelineId("abc"));
+        Assert.Equal("abc", InvokeMgxRequest.ResolvePipelineId(PSObject.AsPSObject("abc")));
+    }
+
+    [Fact]
+    public void ResolvePipelineId_extracts_id_from_a_piped_hashtable()
+    {
+        // Regression: a hashtable used to bind whole to the [string] parameter, putting
+        // the literal "System.Collections.Hashtable" into the request URL with no error.
+        var user = new Hashtable(StringComparer.OrdinalIgnoreCase)
+        {
+            ["id"] = "abc",
+            ["displayName"] = "Bob"
+        };
+
+        Assert.Equal("abc", InvokeMgxRequest.ResolvePipelineId(user));
+        Assert.Equal("abc", InvokeMgxRequest.ResolvePipelineId(PSObject.AsPSObject(user)));
+    }
+
+    [Fact]
+    public void ResolvePipelineId_extracts_id_from_a_piped_PSCustomObject()
+    {
+        Assert.Equal("abc", InvokeMgxRequest.ResolvePipelineId(PSCustomObject(("id", "abc"))));
+    }
+
+    [Fact]
+    public void ResolvePipelineId_returns_null_when_there_is_no_id()
+    {
+        // ProcessRecord turns this into a WriteError rather than a corrupt URL
+        Assert.Null(InvokeMgxRequest.ResolvePipelineId(new Hashtable { ["displayName"] = "Bob" }));
+        Assert.Null(InvokeMgxRequest.ResolvePipelineId(PSCustomObject(("displayName", "Bob"))));
+    }
+
+    #endregion
+
+    #region Invoke-MgxBatchRequest input
+
+    [Fact]
+    public void ParsePipelineInput_treats_a_string_as_a_url_with_the_shared_method()
+    {
+        var cmdlet = new InvokeMgxBatchRequest { Method = "GET" };
+
+        var parsed = cmdlet.ParsePipelineInput("/me");
+
+        Assert.NotNull(parsed);
+        Assert.Equal("/me", parsed.Url);
+        Assert.Equal("GET", parsed.Method);
+    }
+
+    [Fact]
+    public void ParsePipelineInput_accepts_a_hashtable_with_per_item_method_and_body()
+    {
+        var cmdlet = new InvokeMgxBatchRequest { Method = "GET" };
+        var item = new Hashtable(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Url"] = "/users",
+            ["Method"] = "post",
+            ["Body"] = new Hashtable { ["displayName"] = "Bob" }
+        };
+
+        var parsed = cmdlet.ParsePipelineInput(item);
+
+        Assert.NotNull(parsed);
+        Assert.Equal("/users", parsed.Url);
+        Assert.Equal("POST", parsed.Method);
+        Assert.NotNull(parsed.Body);
+    }
+
+    [Fact]
+    public void ParsePipelineInput_accepts_this_cmdlets_own_output_shape()
+    {
+        // Batch results carry Url/Method/Status/Body, so they can be piped back in for retry
+        var cmdlet = new InvokeMgxBatchRequest { Method = "GET" };
+        var previousResult = new Hashtable(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Url"] = "/me",
+            ["Method"] = "GET",
+            ["Status"] = 429,
+            ["Body"] = null
+        };
+
+        var parsed = cmdlet.ParsePipelineInput(previousResult);
+
+        Assert.NotNull(parsed);
+        Assert.Equal("/me", parsed.Url);
+        Assert.Equal("GET", parsed.Method);
+    }
+
+    [Fact]
+    public void ParsePipelineInput_still_accepts_the_documented_PSCustomObject_shape()
+    {
+        var cmdlet = new InvokeMgxBatchRequest { Method = "GET" };
+
+        var parsed = cmdlet.ParsePipelineInput(
+            PSCustomObject(("Url", "/groups"), ("Method", "PATCH")));
+
+        Assert.NotNull(parsed);
+        Assert.Equal("/groups", parsed.Url);
+        Assert.Equal("PATCH", parsed.Method);
+    }
+
+    [Fact]
+    public void ParsePipelineInput_falls_back_to_the_shared_method_when_the_item_has_none()
+    {
+        var cmdlet = new InvokeMgxBatchRequest { Method = "DELETE" };
+
+        var parsed = cmdlet.ParsePipelineInput(new Hashtable { ["Url"] = "/users/abc" });
+
+        Assert.NotNull(parsed);
+        Assert.Equal("DELETE", parsed.Method);
+    }
+
+    #endregion
+
+    #region Body serialization
+
+    [Fact]
+    public void SerializeBody_passes_a_string_through_untouched()
+    {
+        const string raw = """{"displayName":"Bob"}""";
+
+        Assert.Equal(raw, InvokeMgxRequest.SerializeBody(raw));
+    }
+
+    [Fact]
+    public void SerializeBody_serializes_a_hashtable()
+    {
+        var json = InvokeMgxRequest.SerializeBody(new Hashtable { ["displayName"] = "Bob" });
+
+        Assert.Equal("Bob", JsonDocument.Parse(json).RootElement.GetProperty("displayName").GetString());
+    }
+
+    [Fact]
+    public void SerializeBody_serializes_a_PSCustomObject()
+    {
+        var json = InvokeMgxRequest.SerializeBody(PSCustomObject(("displayName", "Bob")));
+
+        Assert.Equal("Bob", JsonDocument.Parse(json).RootElement.GetProperty("displayName").GetString());
+    }
+
+    [Fact]
+    public void SerializeBody_recurses_into_a_nested_PSCustomObject()
+    {
+        // Regression: a nested PSCustomObject used to serialize as {} because its
+        // BaseObject was assumed to be a PSObject. Silent data loss on write.
+        var body = new Hashtable
+        {
+            ["profile"] = PSCustomObject(("city", "Bern"))
+        };
+
+        var json = InvokeMgxRequest.SerializeBody(body);
+
+        var city = JsonDocument.Parse(json).RootElement
+            .GetProperty("profile").GetProperty("city").GetString();
+        Assert.Equal("Bern", city);
+    }
+
+    [Fact]
+    public void SerializeBody_recurses_through_mixed_nesting_and_arrays()
+    {
+        var body = new Hashtable
+        {
+            ["outer"] = PSCustomObject(("inner", new Hashtable { ["leaf"] = 1 })),
+            ["tags"] = new object[] { "a", new Hashtable { ["k"] = "v" } }
+        };
+
+        var root = JsonDocument.Parse(InvokeMgxRequest.SerializeBody(body)).RootElement;
+
+        Assert.Equal(1, root.GetProperty("outer").GetProperty("inner").GetProperty("leaf").GetInt32());
+        Assert.Equal("a", root.GetProperty("tags")[0].GetString());
+        Assert.Equal("v", root.GetProperty("tags")[1].GetProperty("k").GetString());
+    }
+
+    [Fact]
+    public void SerializeBody_serializes_an_ordered_dictionary()
+    {
+        var json = InvokeMgxRequest.SerializeBody(new OrderedDictionary { ["displayName"] = "Bob" });
+
+        Assert.Equal("Bob", JsonDocument.Parse(json).RootElement.GetProperty("displayName").GetString());
+    }
+
+    [Fact]
+    public void A_read_result_round_trips_back_into_a_write_body()
+    {
+        // Read -> modify -> PATCH is the round-trip the ODataType rename used to break:
+        // the body went out with a bogus "ODataType" field that Graph rejects.
+        var read = MgxCmdletBase.JsonToHashtable(JsonSerializer.Deserialize<JsonElement>("""
+            { "@odata.type": "#microsoft.graph.user", "id": "abc", "displayName": "Bob" }
+            """));
+        read["displayName"] = "Renamed";
+
+        var root = JsonDocument.Parse(InvokeMgxRequest.SerializeBody(read)).RootElement;
+
+        Assert.Equal("#microsoft.graph.user", root.GetProperty("@odata.type").GetString());
+        Assert.Equal("Renamed", root.GetProperty("displayName").GetString());
+        Assert.False(root.TryGetProperty("ODataType", out _));
+    }
+
+    #endregion
+}

@@ -6,7 +6,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "User.Read.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 # Get users with beta-only properties (e.g. customSecurityAttributes)
 $users = Invoke-MgxRequest /users `

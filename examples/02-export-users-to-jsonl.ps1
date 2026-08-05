@@ -9,7 +9,7 @@
 #
 # Requirements: Connect-MgGraph -Scopes "User.Read.All"
 
-Import-Module Mgx
+Import-Module M365DSC.mgx
 
 $outputFile    = "./users.jsonl"
 $checkpointFile = "./users-checkpoint.json"
