@@ -114,6 +114,21 @@ RESILIENCE
     The pipeline is shared across all cmdlet invocations within a session.
     Use Set-MgxOption to tune parameters at runtime.
 
+AUTHENTICATION
+    Mgx has no connect cmdlet of its own. It follows the context established
+    by Connect-MgGraph and builds its HTTP client from it.
+
+    That client is cached for the session and rebuilt automatically whenever
+    the effective identity changes - a different tenant, application, account,
+    certificate, credential type, scope set, or cloud. Re-running
+    Connect-MgGraph with another service principal therefore takes effect on
+    the next Mgx call, with no need to restart PowerShell. Run any cmdlet with
+    -Verbose to see the rebuild reported.
+
+    If Enable-MgxResilience is active when the identity changes, Mgx
+    re-injects resilience into the Microsoft.Graph SDK client as well. When it
+    cannot, it warns and asks you to run Enable-MgxResilience again.
+
 CONFIGURATION
     Use Get-MgxOption to inspect the current resilience settings and
     Set-MgxOption to change them. Only explicitly passed parameters are

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.1
+
+- Fixed an issue where Mgx cmdlets kept using the credentials of the first `Connect-MgGraph` call in a session. The cached HTTP client was keyed on tenant id alone, so reconnecting to the same tenant with a different application, certificate, account, or scope set silently reused the previous identity and its permissions.
+- Fixed an issue when `Enable-MgxResilience` was active. Its wrapper around the Microsoft.Graph SDK client stayed bound to the pre-reconnect client. Resilience is now re-injected automatically when the identity changes. If that is not possible, a warning names `Enable-MgxResilience` as the fix.
+- The current auth context is now read from `GraphSession` directly instead of invoking `Get-MgContext` on every request, removing a PowerShell runspace round-trip from the hot path. `Get-MgContext` remains the fallback.
+- Fixed an issue where a single throttling episode slowed `Invoke-MgxBatchRequest` for the rest of the session. A 429 halves the write pacing rate and the reduced rate is persisted across calls, but nothing ever raised it again. The rate now recovers after two consecutive chunks without a 429, it adds back a tenth of the configured rate, and five minutes without any throttling restores the configured rate outright. Both adjustments are reported under `-Verbose`.
+- Fixed an issue where `Set-MgxOption -TotalTimeoutSeconds` did not reach the HTTP client. `HttpClient.Timeout` is fixed once the first request has been sent, so the cached client kept the timeout it was built with. The client is now rebuilt when the value changes.
+- Fixed an issue where the internal type cache was never invalidated. Re-importing `Microsoft.Graph.Authentication` (a different version, or into a fresh load context) left Mgx resolving `GraphSession` to the previous assembly's type, and therefore to a different singleton than the one the SDK was using. The cache is now dropped whenever an assembly loads.
+
 ## 2.0.0
 
 **Breaking changes.**

@@ -64,5 +64,6 @@ public class AlcInitializer : IModuleAssemblyInitializer, IModuleAssemblyCleanup
     public void OnRemove(PSModuleInfo module)
     {
         AssemblyLoadContext.Default.Resolving -= ResolveDependency;
+        Base.MgxCmdletBase.DetachAssemblyLoadHandler();
     }
 }
