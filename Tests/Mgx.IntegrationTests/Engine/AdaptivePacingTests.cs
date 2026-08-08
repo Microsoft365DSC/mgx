@@ -67,28 +67,44 @@ public class AdaptivePacingTests
         Assert.Equal(configured, rate);
     }
 
+    // Both timestamps are synthesized rather than anchored to Stopwatch.GetTimestamp().
+    private static long Ticks(double seconds) => (long)(seconds * Stopwatch.Frequency);
+
+    private static long RecoveryWindowTicks =>
+        Ticks(GraphBatchClient.AdaptiveRecoveryWindow.TotalSeconds);
+
     [Fact]
     public void Adapted_rate_expires_after_a_long_quiet_period()
     {
-        var now = Stopwatch.GetTimestamp();
-        var throttledLongAgo = now
-            - (long)((GraphBatchClient.AdaptiveRecoveryWindow.TotalSeconds + 60) * Stopwatch.Frequency);
+        const long throttledAt = 1;
 
-        Assert.True(GraphBatchClient.AdaptedRateHasExpired(throttledLongAgo, now));
+        Assert.True(GraphBatchClient.AdaptedRateHasExpired(
+            throttledAt, throttledAt + RecoveryWindowTicks + Ticks(60)));
     }
 
     [Fact]
     public void Adapted_rate_survives_a_recent_throttle()
     {
-        var now = Stopwatch.GetTimestamp();
-        var throttledJustNow = now - (long)(5 * Stopwatch.Frequency);
+        const long throttledAt = 1;
 
-        Assert.False(GraphBatchClient.AdaptedRateHasExpired(throttledJustNow, now));
+        Assert.False(GraphBatchClient.AdaptedRateHasExpired(throttledAt, throttledAt + Ticks(5)));
+    }
+
+    [Fact]
+    public void Adapted_rate_survives_right_up_to_the_window_boundary()
+    {
+        const long throttledAt = 1;
+
+        Assert.False(GraphBatchClient.AdaptedRateHasExpired(
+            throttledAt, throttledAt + RecoveryWindowTicks));
+        Assert.True(GraphBatchClient.AdaptedRateHasExpired(
+            throttledAt, throttledAt + RecoveryWindowTicks + 1));
     }
 
     [Fact]
     public void Never_expires_when_no_throttle_was_ever_recorded()
     {
-        Assert.False(GraphBatchClient.AdaptedRateHasExpired(0, Stopwatch.GetTimestamp()));
+        // Zero means "no 429 seen yet", not "throttled at boot".
+        Assert.False(GraphBatchClient.AdaptedRateHasExpired(0, RecoveryWindowTicks * 10));
     }
 }
