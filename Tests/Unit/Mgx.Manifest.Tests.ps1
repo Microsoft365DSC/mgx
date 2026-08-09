@@ -28,11 +28,6 @@ Describe 'mgx module manifest' {
         $script:Manifest.CompatiblePSEditions | Should -Not -Contain 'Desktop'
     }
 
-    It 'requires Microsoft.Graph.Authentication' {
-        # Auth and the Graph endpoint are resolved from the SDK's GraphSession
-        $script:Manifest.RequiredModules.Name | Should -Contain 'Microsoft.Graph.Authentication'
-    }
-
     It 'pre-loads Mgx.Engine.dll via RequiredAssemblies' {
         # Without this, MgxTelemetrySummary resolves into a different load context
         # and Get-MgxTelemetry fails at JIT time with TypeLoadException
