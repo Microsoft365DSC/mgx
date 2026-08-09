@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.3
+
+- Removed manifest dependency on `Microsoft.Graph.Authentication` to prevent updating it to a newer version than what is already installed.
+
 ## 2.0.2
 
 - Fixed an issue where a JSON string passed to `-Body` was silently dropped. PowerShell does not unwrap `PSObject` when binding to an `object`-typed parameter, so `-Body (@{...} | ConvertTo-Json)` arrived wrapped, missed the string branch of the serializer, and was serialized as `{}`. The request went out with an empty body and Graph answered with an empty result, without an error anywhere.
