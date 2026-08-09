@@ -261,6 +261,46 @@ public class PipelineContractTests
     }
 
     [Fact]
+    public void SerializeBody_passes_a_PSObject_wrapped_string_through_untouched()
+    {
+        const string raw = """{"ids":["3429da5f-44ce-4020-ad7c-cb839eb50528"]}""";
+
+        Assert.Equal(raw, InvokeMgxRequest.SerializeBody(PSObject.AsPSObject(raw)));
+    }
+
+    [Fact]
+    public void SerializeBody_serializes_a_PSObject_wrapped_hashtable()
+    {
+        var wrapped = PSObject.AsPSObject(new Hashtable { ["displayName"] = "Bob" });
+
+        var json = InvokeMgxRequest.SerializeBody(wrapped);
+
+        Assert.Equal("Bob", JsonDocument.Parse(json).RootElement.GetProperty("displayName").GetString());
+    }
+
+    [Fact]
+    public void SerializeBody_serializes_a_PSObject_wrapped_array()
+    {
+        var wrapped = PSObject.AsPSObject(new object[] { "a", new Hashtable { ["k"] = "v" } });
+
+        var root = JsonDocument.Parse(InvokeMgxRequest.SerializeBody(wrapped)).RootElement;
+
+        Assert.Equal(JsonValueKind.Array, root.ValueKind);
+        Assert.Equal("a", root[0].GetString());
+        Assert.Equal("v", root[1].GetProperty("k").GetString());
+    }
+
+    [Fact]
+    public void SerializeBody_serializes_a_non_array_list_body()
+    {
+        var body = new ArrayList { new Hashtable { ["k"] = "v" } };
+
+        var root = JsonDocument.Parse(InvokeMgxRequest.SerializeBody(body)).RootElement;
+
+        Assert.Equal("v", root[0].GetProperty("k").GetString());
+    }
+
+    [Fact]
     public void SerializeBody_serializes_an_ordered_dictionary()
     {
         var json = InvokeMgxRequest.SerializeBody(new OrderedDictionary { ["displayName"] = "Bob" });
@@ -283,6 +323,47 @@ public class PipelineContractTests
         Assert.Equal("#microsoft.graph.user", root.GetProperty("@odata.type").GetString());
         Assert.Equal("Renamed", root.GetProperty("displayName").GetString());
         Assert.False(root.TryGetProperty("ODataType", out _));
+    }
+
+    #endregion
+
+    #region Response shape
+
+    [Fact]
+    public void TryUnwrapCollection_unwraps_an_action_response_envelope()
+    {
+        // POST /directoryObjects/getByIds and friends answer with the same {"value":[...]}
+        // envelope a GET collection uses. The write path used to emit it as one object.
+        var json = JsonSerializer.Deserialize<JsonElement>("""
+            { "@odata.context": "ctx", "value": [ { "id": "a" }, { "id": "b" } ] }
+            """);
+
+        var items = InvokeMgxRequest.TryUnwrapCollection(json, out var truncated);
+
+        Assert.NotNull(items);
+        Assert.Equal(2, items.Count);
+        Assert.Equal("a", items[0].GetProperty("id").GetString());
+        Assert.False(truncated);
+    }
+
+    [Fact]
+    public void TryUnwrapCollection_reports_a_truncated_envelope()
+    {
+        var json = JsonSerializer.Deserialize<JsonElement>("""
+            { "value": [ { "id": "a" } ], "@odata.nextLink": "https://graph.microsoft.com/v1.0/next" }
+            """);
+
+        Assert.NotNull(InvokeMgxRequest.TryUnwrapCollection(json, out var truncated));
+        Assert.True(truncated);
+    }
+
+    [Fact]
+    public void TryUnwrapCollection_leaves_a_single_entity_alone()
+    {
+        // An entity with its own scalar 'value' property must not be mistaken for a collection
+        var json = JsonSerializer.Deserialize<JsonElement>("""{ "id": "a", "value": "not-an-array" }""");
+
+        Assert.Null(InvokeMgxRequest.TryUnwrapCollection(json, out _));
     }
 
     #endregion
