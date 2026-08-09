@@ -171,6 +171,8 @@ public abstract class MgxCmdletBase : PSCmdlet, IDisposable
         _client.BodyReadTimeout = TimeSpan.FromSeconds(clientOptions.AttemptTimeoutSeconds);
         _client.VerboseWriter = msg => WriteVerbose(msg);
         _client.WarningWriter = msg => WriteWarning(msg);
+        _client.DebugWriter = msg => WriteDebug(msg);
+        _client.DebugEnabled = IsDebugRequested();
         return _client;
     }
 
@@ -665,6 +667,24 @@ public abstract class MgxCmdletBase : PSCmdlet, IDisposable
     {
         _client?.DrainVerboseMessages();
         _client?.DrainWarningMessages();
+        _client?.DrainDebugMessages();
+    }
+
+    /// <summary>
+    /// Whether the caller asked for the HTTP trace, via -Debug on this invocation or a
+    /// $DebugPreference that would display the messages anyway.
+    /// </summary>
+    protected bool IsDebugRequested()
+    {
+        if (MyInvocation.BoundParameters.TryGetValue("Debug", out var debug)
+            && debug is SwitchParameter { IsPresent: true })
+        {
+            return true;
+        }
+
+        return GetVariableValue("DebugPreference") is ActionPreference preference
+            && preference != ActionPreference.SilentlyContinue
+            && preference != ActionPreference.Ignore;
     }
 
     internal static void SetClientOptions(ResilientGraphClientOptions options)

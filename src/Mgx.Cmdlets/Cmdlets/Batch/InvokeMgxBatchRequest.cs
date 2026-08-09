@@ -173,18 +173,35 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                 ItemHeaders = itemHeaders
             };
 
-            // Convert to BatchOperation list
-            var operations = _collected.Select(input =>
+            // Convert to BatchOperation list.
+            var operations = new List<BatchOperation>(_collected.Count);
+            var submitted = new List<BatchInput>(_collected.Count);
+            foreach (var input in _collected)
             {
-                var relativeUrl = NormalizeToRelativeUrl(input.Url);
                 JsonElement? body = null;
                 if (input.Body != null)
                 {
                     var json = InvokeMgxRequest.SerializeBody(input.Body);
-                    body = JsonSerializer.Deserialize<JsonElement>(json);
+                    try
+                    {
+                        body = JsonSerializer.Deserialize<JsonElement>(json);
+                    }
+                    catch (JsonException ex)
+                    {
+                        WriteError(new ErrorRecord(
+                            new ArgumentException(
+                                $"Body for {input.Method} {input.Url} is not valid JSON: {ex.Message}", ex),
+                            "InvalidBatchItemBody", ErrorCategory.InvalidArgument, input.Url));
+                        continue;
+                    }
                 }
-                return new BatchOperation(relativeUrl, input.Method, body);
-            }).ToList();
+
+                operations.Add(new BatchOperation(NormalizeToRelativeUrl(input.Url), input.Method, body));
+                submitted.Add(input);
+            }
+
+            if (operations.Count == 0)
+                return;
 
             var batchResult = batchClient.ExecuteBatchIndexedAsync(operations, CancellationToken)
                 .GetAwaiter().GetResult();
@@ -196,7 +213,7 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
             for (int i = 0; i < results.Count; i++)
             {
                 var (_, item) = results[i];
-                var input = _collected[i];
+                var input = submitted[i];
 
                 var result = new Hashtable(StringComparer.OrdinalIgnoreCase)
                 {
@@ -218,7 +235,7 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                 var (_, item) = results[i];
                 if (item.Status >= 400)
                 {
-                    var input = _collected[i];
+                    var input = submitted[i];
                     var graphMessage = TryExtractBatchErrorMessage(item);
                     var errorMessage = graphMessage != null
                         ? $"{input.Method} {input.Url}: {graphMessage}"
@@ -241,7 +258,7 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                         var (_, item) = results[i];
                         if (item.Status < 400) continue;
 
-                        var input = _collected[i];
+                        var input = submitted[i];
                         var deadLetter = new JsonObject
                         {
                             ["Timestamp"] = DateTime.UtcNow.ToString("o"),

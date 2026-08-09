@@ -247,6 +247,10 @@ public class InvokeMgxRequest : MgxCmdletBase
 
         if (httpMethod == HttpMethod.Get)
         {
+            // Graph GET has no request body, and neither GET path sends one
+            if (Body != null)
+                WriteWarning("-Body is ignored on GET requests.");
+
             if (IsCollectionMode)
                 ExecuteList(relativeUri, sourceId);
             else
@@ -451,22 +455,7 @@ public class InvokeMgxRequest : MgxCmdletBase
             var json = JsonSerializer.DeserializeAsync<JsonElement>(stream, cancellationToken: CancellationToken)
                 .AsTask().GetAwaiter().GetResult();
 
-            // If response is a collection (has "value" array), return items from first page
-            if (json.ValueKind == JsonValueKind.Object &&
-                json.TryGetProperty("value", out var valueArray) &&
-                valueArray.ValueKind == JsonValueKind.Array)
-            {
-                // Warn on truncated collection
-                if (json.TryGetProperty("@odata.nextLink", out _))
-                    WriteWarning("Response contains more items. Use -All to retrieve all pages, or -Top to limit results.");
-
-                foreach (var item in valueArray.EnumerateArray())
-                    OutputItem(item, sourceId);
-            }
-            else
-            {
-                OutputItem(json, sourceId);
-            }
+            OutputPayload(json, sourceId);
         }
         catch (OperationCanceledException) when (CancellationToken.IsCancellationRequested)
         {
@@ -493,18 +482,10 @@ public class InvokeMgxRequest : MgxCmdletBase
             var client = GetClient();
             var headers = BuildHeaders();
 
-            // Graph API requires Content-Type: application/json on write methods
-            // (POST, PATCH, PUT) even when the body is empty. DELETE does not need it.
-            HttpContent? content = null;
-            if (Body != null)
-            {
-                var json = SerializeBody(Body);
-                content = new StringContent(json, Encoding.UTF8, "application/json");
-            }
-            else if (method != HttpMethod.Delete)
-            {
-                content = new StringContent("{}", Encoding.UTF8, "application/json");
-            }
+            var serializedBody = ResolveRequestBody(method);
+            HttpContent? content = serializedBody != null
+                ? new StringContent(serializedBody, Encoding.UTF8, "application/json")
+                : null;
 
             try
             {
@@ -528,7 +509,7 @@ public class InvokeMgxRequest : MgxCmdletBase
                 if (bodyBytes.Length > 0)
                 {
                     var jsonEl = JsonSerializer.Deserialize<JsonElement>(bodyBytes);
-                    OutputItem(jsonEl, sourceId);
+                    OutputPayload(jsonEl, sourceId);
                 }
             }
             finally
@@ -713,12 +694,8 @@ public class InvokeMgxRequest : MgxCmdletBase
 
         try
         {
-            // Serialize body once (shared across all operations).
-            // For non-DELETE write methods, default to empty JSON object so ConcurrentFanOut
-            // creates HttpContent with Content-Type: application/json (required by Graph API).
-            string? serializedBody = Body != null
-                ? SerializeBody(Body)
-                : (httpMethod != HttpMethod.Delete ? "{}" : null);
+            // Serialize body once (shared across all operations)
+            string? serializedBody = ResolveRequestBody(httpMethod);
 
             // Build operations list: (id, resolved URL)
             var operations = uniqueIds.Select(id =>
@@ -742,7 +719,7 @@ public class InvokeMgxRequest : MgxCmdletBase
             // Output response bodies (created/updated entities)
             foreach (var (sourceId, json) in result.Responses)
             {
-                OutputItem(json, sourceId);
+                OutputPayload(json, sourceId);
             }
 
             // Handle errors with SkipNotFound/SkipForbidden filtering
@@ -939,6 +916,46 @@ public class InvokeMgxRequest : MgxCmdletBase
     private Dictionary<string, string>? BuildHeaders() =>
         BuildRequestHeaders(ConsistencyLevel, Headers);
 
+    /// <summary>
+    /// Emit a Graph response payload. A collection envelope ({"value":[...]}, returned by GET and by
+    /// action endpoints such as /directoryObjects/getByIds) is unwrapped into one item per element;
+    /// anything else is emitted whole.
+    /// </summary>
+    private void OutputPayload(JsonElement json, string? sourceId)
+    {
+        var items = TryUnwrapCollection(json, out var truncated);
+        if (items == null)
+        {
+            OutputItem(json, sourceId);
+            return;
+        }
+
+        if (truncated)
+            WriteWarning("Response contains more items. Use -All to retrieve all pages, or -Top to limit results.");
+
+        foreach (var item in items)
+            OutputItem(item, sourceId);
+    }
+
+    /// <summary>
+    /// The elements of a Graph collection envelope ({"value":[...]}), or null when the payload is a
+    /// single entity. <paramref name="truncated"/> reports whether the envelope carried @odata.nextLink.
+    /// </summary>
+    internal static List<JsonElement>? TryUnwrapCollection(JsonElement json, out bool truncated)
+    {
+        truncated = false;
+
+        if (json.ValueKind != JsonValueKind.Object
+            || !json.TryGetProperty("value", out var valueArray)
+            || valueArray.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        truncated = json.TryGetProperty("@odata.nextLink", out _);
+        return valueArray.EnumerateArray().ToList();
+    }
+
     private void OutputItem(JsonElement element, string? sourceId)
     {
         if (Raw.IsPresent)
@@ -959,14 +976,34 @@ public class InvokeMgxRequest : MgxCmdletBase
         WriteObject(ht);
     }
 
+    /// <summary>
+    /// Serialized request body for a write method, or null when no content should be sent.
+    /// Graph requires Content-Type: application/json on POST/PATCH/PUT even with an empty body,
+    /// so those default to "{}". DELETE sends no content.
+    /// </summary>
+    private string? ResolveRequestBody(HttpMethod method)
+    {
+        var serialized = Body != null ? SerializeBody(Body) : null;
+        if (!string.IsNullOrWhiteSpace(serialized))
+            return serialized;
+
+        return method != HttpMethod.Delete ? "{}" : null;
+    }
+
+    /// <summary>
+    /// Serialize a -Body argument to the JSON that goes on the wire. A raw JSON string is passed
+    /// through verbatim, everything else is serialized.
+    /// </summary>
     internal static string SerializeBody(object body)
     {
-        if (body is string s) return s;
-        if (body is PSObject pso) return JsonSerializer.Serialize(PSOToDict(pso));
-        if (body is IDictionary dict) return JsonSerializer.Serialize(DictionaryToDict(dict));
-        // Handle array body (e.g., object[] from PowerShell)
-        if (body is object[] arr) return JsonSerializer.Serialize(arr.Select(UnwrapValue).ToArray());
-        return JsonSerializer.Serialize(body);
+        var value = UnwrapPSObject(body);
+        if (value is string s) return s;
+        // Still a PSObject after unwrapping: a PSCustomObject, whose members live on the wrapper
+        if (value is PSObject pso) return JsonSerializer.Serialize(PSOToDict(pso));
+        if (value is IDictionary dict) return JsonSerializer.Serialize(DictionaryToDict(dict));
+        // Handle array body (object[], ArrayList, List<object>, ... from PowerShell)
+        if (value is IEnumerable seq) return JsonSerializer.Serialize(EnumerableToArray(seq));
+        return JsonSerializer.Serialize(value);
     }
 
     internal static Dictionary<string, object?> PSOToDict(PSObject pso)
@@ -1006,10 +1043,17 @@ public class InvokeMgxRequest : MgxCmdletBase
         }
         if (value is IDictionary dict)
             return DictionaryToDict(dict);
-        if (value is object[] arr)
-            return arr.Select(UnwrapValue).ToArray();
+        if (value is IEnumerable seq and not string)
+            return EnumerableToArray(seq);
         return value;
     }
+
+    /// <summary>
+    /// Flatten any non-string sequence (object[], ArrayList, List&lt;object&gt;, ...) into an array of
+    /// unwrapped values.
+    /// </summary>
+    private static object?[] EnumerableToArray(IEnumerable source) =>
+        source.Cast<object?>().Select(UnwrapValue).ToArray();
 
     #endregion
 

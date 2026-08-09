@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.2
+
+- Fixed an issue where a JSON string passed to `-Body` was silently dropped. PowerShell does not unwrap `PSObject` when binding to an `object`-typed parameter, so `-Body (@{...} | ConvertTo-Json)` arrived wrapped, missed the string branch of the serializer, and was serialized as `{}`. The request went out with an empty body and Graph answered with an empty result, without an error anywhere.
+- Write responses that carry a collection envelope (`{"value":[...]}`), as returned by action endpoints such as `/directoryObjects/getByIds`, `/getMemberGroups` and `/checkMemberGroups`, are now unwrapped into one object per element, matching what GET already did.
+- Added `-Debug` request/response tracing to every cmdlet, covering single requests, pagination, fan-out and `$batch`.
+- Fixed the `SdkVersion` header, which still announced `mgx/0.3.0` on every Graph request. It is now derived from the assembly version, set once in `Directory.Build.props`, and a test fails the build if it ever drifts from `ModuleVersion` in the module manifest.
+- `-Body` on a GET request now warns instead of being silently ignored, an empty or whitespace body falls back to `{}` instead of sending a zero-length JSON request, and a batch item whose body is not valid JSON now fails on its own instead of aborting the whole batch.
+
 ## 2.0.1
 
 - Fixed an issue where Mgx cmdlets kept using the credentials of the first `Connect-MgGraph` call in a session. The cached HTTP client was keyed on tenant id alone, so reconnecting to the same tenant with a different application, certificate, account, or scope set silently reused the previous identity and its permissions.
