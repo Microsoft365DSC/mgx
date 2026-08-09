@@ -1,6 +1,6 @@
 @{
     RootModule        = 'M365DSC.mgx.psm1'
-    ModuleVersion     = '2.0.2'
+    ModuleVersion     = '2.0.3'
     GUID              = 'f978315f-75c0-48f5-b929-ca7a7757d1d2'
     Author            = 'Thomas Maillo Grome, Fabien Tschanz'
     CompanyName       = 'Mgx'
@@ -18,9 +18,11 @@
     # time with TypeLoadException when Get-MgxTelemetry is called.
     RequiredAssemblies = @('Mgx.Engine.dll')
 
+    <#
     RequiredModules   = @(
         @{ ModuleName = 'Microsoft.Graph.Authentication'; ModuleVersion = '2.10.0' }
     )
+    #>
 
     CmdletsToExport   = @(
         'Invoke-MgxRequest'
@@ -46,12 +48,8 @@
             LicenseUri   = 'https://github.com/Microsoft365DSC/mgx/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/Microsoft365DSC/mgx'
             ReleaseNotes = @'
-v2.0.2
-- Fixed an issue where a JSON string body was silently dropped.
-- Write responses that carry a collection envelope ({"value":[...]}), as returned by action endpoints such as /directoryObjects/getByIds, are now unwrapped into one object per element, matching GET.
-- Added -Debug request/response tracing for every cmdlet: method, URL, headers, body, status, timing and Graph diagnostic headers, per retry attempt.
-- Fixed the SdkVersion header, which still announced mgx/0.3.0 on every Graph request. It now follows the module version.
-- -Body is now warned about instead of silently ignored on GET, an empty body falls back to {}, and a batch item whose body is not valid JSON fails on its own instead of aborting the batch.
+v2.0.3
+- Removed manifest dependency on `Microsoft.Graph.Authentication` to prevent updating it to a newer version than what is already installed.
 '@
         }
     }
