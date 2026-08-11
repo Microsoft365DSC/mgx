@@ -12,12 +12,6 @@ if (Test-Path $CmdletsDll) {
     Write-Error "Mgx.Cmdlets.dll not found at $CmdletsDll. Did you run the build script?"
 }
 
-# Clean up static state on module removal to prevent resource leaks
-$MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
-    [Mgx.Cmdlets.Base.MgxCmdletBase]::ResetHttpClient()
-    [Mgx.Engine.Http.ResiliencePipelineFactory]::Reset()
-}
-
 # Tab completion for Graph API resource paths
 $script:UriCompletions = @(
     @{ Text = 'users';                       Tip = 'All users in the tenant' }
