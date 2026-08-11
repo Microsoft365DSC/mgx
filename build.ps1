@@ -12,6 +12,19 @@ $DepsDir = Join-Path $ModuleRoot 'Dependencies'
 
 Write-Host "Building Mgx ($Configuration)..." -ForegroundColor Cyan
 
+$manifestVersion = (Import-PowerShellDataFile (Join-Path $ModuleRoot 'M365DSC.mgx.psd1')).ModuleVersion
+$propsFile = Join-Path $PSScriptRoot 'Directory.Build.props'
+$assemblyVersion = ([xml](Get-Content $propsFile -Raw)).Project.PropertyGroup.Version
+if ([string]::IsNullOrWhiteSpace($assemblyVersion)) {
+    throw "Version gate failed: could not read <Version> from $propsFile"
+}
+if ($assemblyVersion -ne $manifestVersion) {
+    throw "Version gate failed: Directory.Build.props <Version> is '$assemblyVersion' but " +
+          "M365DSC.mgx.psd1 ModuleVersion is '$manifestVersion'. These must match - the first " +
+          "becomes the SdkVersion request header, the second is what ships to the gallery."
+}
+Write-Host "Version gate: mgx/$assemblyVersion matches manifest" -ForegroundColor DarkGray
+
 # Clean previous build artifacts
 if (Test-Path $DepsDir) { Remove-Item $DepsDir -Recurse -Force }
 $binDir = Join-Path $ModuleRoot 'bin'

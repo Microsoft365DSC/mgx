@@ -1,6 +1,6 @@
 @{
     RootModule        = 'M365DSC.mgx.psm1'
-    ModuleVersion     = '2.0.3'
+    ModuleVersion     = '2.0.4'
     GUID              = 'f978315f-75c0-48f5-b929-ca7a7757d1d2'
     Author            = 'Thomas Maillo Grome, Fabien Tschanz'
     CompanyName       = 'Mgx'
@@ -48,8 +48,10 @@
             LicenseUri   = 'https://github.com/Microsoft365DSC/mgx/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/Microsoft365DSC/mgx'
             ReleaseNotes = @'
-v2.0.3
-- Removed manifest dependency on `Microsoft.Graph.Authentication` to prevent updating it to a newer version than what is already installed.
+v2.0.4
+- Fixed `Remove-Module M365DSC.mgx` failing and leaving the module permanently loaded. Only triggered when no Graph request had run in the session.
+- CA1416 is now a build error, keeping Windows-only APIs out of the cross-platform code paths.
+- Internal: cmdlet lifecycle and JSON conversion moved to a new `MgxCmdletCore` base class. No change to the cmdlet surface.
 '@
         }
     }
