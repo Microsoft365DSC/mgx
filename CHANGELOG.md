@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.4
+
+- Fixed `Remove-Module M365DSC.mgx` failing and leaving the module permanently loaded. Static-state cleanup now runs in `AlcInitializer.OnRemove`, ahead of the ALC resolver detaching; it previously ran from the module's `OnRemove` scriptblock, which PowerShell invokes *after* that callback, by which point `Polly.Core` was no longer resolvable and the cleanup threw. Only triggered in sessions where no Graph request had run, because `Polly.Core` loads lazily.
+- `CA1416` is now an error in both projects, so a Windows-only API reaching the cross-platform code paths fails the build instead of throwing `PlatformNotSupportedException` on a Linux or macOS host.
+- Internal: cmdlet lifecycle and JSON-to-`Hashtable` conversion moved from `MgxCmdletBase` to a new `MgxCmdletCore` base class. No change to the cmdlet surface. Structure adopted from upstream 1.0.3; the conversion itself remains this fork's `Hashtable` implementation.
+- `build.ps1` now fails before compiling if `<Version>` in `Directory.Build.props` and `ModuleVersion` in `M365DSC.mgx.psd1` disagree.
+
 ## 2.0.3
 
 - Removed manifest dependency on `Microsoft.Graph.Authentication` to prevent updating it to a newer version than what is already installed.
@@ -32,6 +39,17 @@
 - **BREAKING:** The `@odata.type` property is now returned verbatim instead of being renamed to `ODataType`, matching the Graph API response. Code reading `.ODataType` must read `.'@odata.type'` instead. This also fixes round-tripping: a read result piped into `-Body` on PATCH/POST no longer sends a bogus `ODataType` field.
 - `Expand-MgxRelation -InputObject` and the `Invoke-MgxRequest` fan-out pipeline parameter now accept hashtables, `PSCustomObject`s, and (for fan-out) bare ID strings. Previously a piped hashtable bound silently as its type name, producing a corrupt URL.
 - `Invoke-MgxBatchRequest` accepts hashtables with `Url`/`Method`/`Body` keys, so its own output can be piped back into it.
+
+## 1.0.3
+
+_Upstream release, merged into this fork at 2.0.4. The `SdkVersion` fix listed here was already
+solved differently in 2.0.2 (derived from the assembly version rather than a hand-maintained
+constant), so upstream's constant and its build gate were not carried over._
+
+- Fixed `Remove-Module Mgx` failing and leaving the module loaded. Static-state cleanup moved into `AlcInitializer.OnRemove`, ahead of the ALC resolver detaching; it previously ran from the module `OnRemove` scriptblock, by which point `Polly.Core` was unresolvable. Only triggered when no Graph request had run in the session
+- Fixed the `SdkVersion` request header reporting `mgx/0.3.0` regardless of the installed version. It now matches the module version, and `build.ps1` fails the build if the constant and the manifest ever disagree
+- Extracted cmdlet lifecycle and JSON conversion to `MgxCmdletCore`. Internal refactor; no change to the cmdlet surface
+- Treat `CA1416` as an error in both projects, so a Windows-only API reaching the cross-platform code paths fails the build instead of throwing `PlatformNotSupportedException` on Linux or macOS
 
 ## 1.0.2
 
