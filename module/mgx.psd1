@@ -1,6 +1,6 @@
 @{
     RootModule        = 'mgx.psm1'
-    ModuleVersion     = '1.0.2'
+    ModuleVersion     = '1.0.3'
     GUID              = 'a3f7e8d2-5b4c-4a1e-9f6d-2c8b0e3a7d5f'
     Author            = 'Thomas Maillo Grome'
     CompanyName       = 'Mgx'
@@ -46,6 +46,12 @@
             LicenseUri   = 'https://github.com/gromedev/mgx/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/gromedev/mgx'
             ReleaseNotes = @'
+v1.0.3
+- Fixed Remove-Module Mgx failing and leaving the module loaded (cleanup now runs before the
+  ALC resolver detaches). Only triggered when no Graph request had run in the session
+- Fixed the SdkVersion request header reporting mgx/0.3.0 regardless of installed version
+- Internal: cmdlet lifecycle and JSON conversion extracted to MgxCmdletCore. No surface change
+
 v1.0.2
 - Fixed Linux install: renamed module files to lowercase so Install-Module works on case-sensitive filesystems
 - Updated about_Mgx_Tuning version reference

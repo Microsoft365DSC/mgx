@@ -1,10 +1,7 @@
 using System.Collections.Concurrent;
-using System.Globalization;
 using System.Management.Automation;
 using System.Net;
 using System.Reflection;
-using System.Text.Json;
-using System.Text.RegularExpressions;
 using Mgx.Engine.Http;
 using Mgx.Engine.Models;
 using Polly.CircuitBreaker;
@@ -13,14 +10,13 @@ namespace Mgx.Cmdlets.Base;
 
 /// <summary>
 /// Lightweight base class for Mgx cmdlets that need Graph client access.
-/// Provides auth, client lifecycle, and JSON-to-PSObject conversion.
+/// Provides auth and client lifecycle on top of <see cref="MgxCmdletCore"/>,
+/// which supplies cancellation, disposal, and JSON-to-PSObject conversion.
 /// Used by Invoke-MgxRequest and Invoke-MgxBatchRequest.
 /// </summary>
-public abstract class MgxCmdletBase : PSCmdlet, IDisposable
+public abstract class MgxCmdletBase : MgxCmdletCore
 {
     private ResilientGraphClient? _client;
-    private CancellationTokenSource _cts = new();
-    private int _disposed; // 0 = not disposed, 1 = disposed (Interlocked for thread safety)
 
     private static readonly object s_initLock = new();
     private static HttpClient? s_graphHttpClient;
@@ -28,13 +24,6 @@ public abstract class MgxCmdletBase : PSCmdlet, IDisposable
     private static string? s_cachedTenantId;
     internal static volatile string s_graphEndpoint = "https://graph.microsoft.com";
     internal static volatile ResilientGraphClientOptions s_clientOptions = ResilientGraphClientOptions.Default;
-
-    // Regex gate for DateTime parsing: requires YYYY-MM-DDT prefix.
-    // Prevents false positives on version strings, GUIDs, numeric IDs.
-    private static readonly Regex Iso8601Pattern = new(
-        @"^\d{4}-\d{2}-\d{2}[T ]", RegexOptions.Compiled);
-
-    protected CancellationToken CancellationToken => _cts.Token;
 
     /// <summary>
     /// Base URL for Graph API requests (e.g., "https://graph.microsoft.com/v1.0").
@@ -462,92 +451,6 @@ public abstract class MgxCmdletBase : PSCmdlet, IDisposable
         s_clientOptions = options ?? ResilientGraphClientOptions.Default;
     }
 
-    /// <summary>
-    /// Convert a JsonElement to a PSObject with all properties preserved.
-    /// </summary>
-    protected static PSObject JsonToPSObject(JsonElement element)
-    {
-        var pso = new PSObject();
-
-        // Non-Object elements (string, number, etc.) must wrap value in a property
-        if (element.ValueKind != JsonValueKind.Object)
-        {
-            pso.Properties.Add(new PSNoteProperty("Value", ConvertJsonValue(element)));
-            return pso;
-        }
-
-        string? odataType = null;
-
-        foreach (var prop in element.EnumerateObject())
-        {
-            // Preserve @odata.type as ODataType (critical for polymorphic queries)
-            if (prop.Name.Equals("@odata.type", StringComparison.OrdinalIgnoreCase))
-            {
-                odataType = prop.Value.GetString();
-                if (odataType != null)
-                    pso.Properties.Add(new PSNoteProperty("ODataType", odataType));
-                continue;
-            }
-
-            // Strip other @odata.* metadata (nextLink, context, count)
-            if (prop.Name.StartsWith("@odata.", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            pso.Properties.Add(new PSNoteProperty(prop.Name, ConvertJsonValue(prop.Value)));
-        }
-
-        // Decorate with PSTypeName from @odata.type for Format.ps1xml / polymorphic dispatch
-        // e.g., "#microsoft.graph.user" -> "Mgx.User"
-        if (odataType != null)
-        {
-            var psTypeName = MapODataTypeToPSTypeName(odataType);
-            if (psTypeName != null)
-                pso.TypeNames.Insert(0, psTypeName);
-        }
-
-        return pso;
-    }
-
-    private static object? ConvertJsonValue(JsonElement element)
-    {
-        if (element.ValueKind == JsonValueKind.String)
-        {
-            var str = element.GetString();
-            if (str != null && Iso8601Pattern.IsMatch(str) &&
-                DateTimeOffset.TryParse(str, CultureInfo.InvariantCulture,
-                    DateTimeStyles.RoundtripKind, out var dto))
-                return dto.UtcDateTime;
-            return str;
-        }
-
-        return element.ValueKind switch
-        {
-            JsonValueKind.Number => element.TryGetInt64(out var l) ? l : element.GetDouble(),
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            JsonValueKind.Null => null,
-            JsonValueKind.Array => element.EnumerateArray()
-                .Select(item => item.ValueKind == JsonValueKind.Object ? (object?)JsonToPSObject(item) : ConvertJsonValue(item))
-                .ToArray(),
-            JsonValueKind.Object => JsonToPSObject(element),
-            _ => element.GetRawText()
-        };
-    }
-
-    private static string? MapODataTypeToPSTypeName(string odataType)
-    {
-        const string prefix = "#microsoft.graph.";
-        if (!odataType.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        var typePart = odataType.Substring(prefix.Length);
-        if (string.IsNullOrEmpty(typePart))
-            return null;
-
-        var pascalName = char.ToUpperInvariant(typePart[0]) + typePart.Substring(1);
-        return $"Mgx.{pascalName}";
-    }
-
     #region Shared URL and header builders
 
     protected static string NormalizePath(string path)
@@ -726,27 +629,13 @@ public abstract class MgxCmdletBase : PSCmdlet, IDisposable
             + $"were returned ({pct}% shortfall). {cause}.");
     }
 
-    protected override void StopProcessing()
+    /// <summary>
+    /// Release the Graph client. Invoked by <see cref="MgxCmdletCore.Dispose"/> under
+    /// the Interlocked guard, so this runs exactly once even when StopProcessing
+    /// (pipeline-stopping thread) races EndProcessing (pipeline thread).
+    /// </summary>
+    protected override void DisposeCore()
     {
-        _cts.Cancel();
-        Dispose();
-    }
-
-    protected override void EndProcessing()
-    {
-        Dispose();
-    }
-
-    public void Dispose()
-    {
-        // Thread-safe: StopProcessing (pipeline-stopping thread) and EndProcessing (pipeline thread)
-        // can race. Interlocked ensures only one thread enters the dispose body.
-        if (Interlocked.CompareExchange(ref _disposed, 1, 0) == 0)
-        {
-            _cts.Cancel();
-            _cts.Dispose();
-            _client?.Dispose();
-        }
-        GC.SuppressFinalize(this);
+        _client?.Dispose();
     }
 }

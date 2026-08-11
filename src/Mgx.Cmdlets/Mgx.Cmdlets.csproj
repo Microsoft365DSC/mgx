@@ -6,6 +6,9 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Mgx.Cmdlets</RootNamespace>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <!-- See Mgx.Engine.csproj: CA1416 keeps Windows-only directory APIs out of the
+         cross-platform code paths at build time rather than at a customer's runtime. -->
+    <WarningsAsErrors>$(WarningsAsErrors);CA1416</WarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>

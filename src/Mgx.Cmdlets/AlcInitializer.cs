@@ -63,6 +63,32 @@ public class AlcInitializer : IModuleAssemblyInitializer, IModuleAssemblyCleanup
 
     public void OnRemove(PSModuleInfo module)
     {
+        // Static-state cleanup MUST happen before the resolver is detached below.
+        //
+        // ResetHttpClient JIT-compiles code referencing ResilientGraphClient, whose fields
+        // include Polly types. Polly.Core ships in Dependencies/ and is reachable ONLY via
+        // ResolveDependency. It is also loaded lazily, so in a session where no Graph request
+        // ever ran it is absent from the AppDomain entirely.
+        //
+        // This cleanup used to live in the mgx.psm1 OnRemove scriptblock, which PowerShell
+        // invokes AFTER this callback. That ordering left the resolver already detached, so
+        // ResetHttpClient threw FileNotFoundException for Polly.Core, Remove-Module failed,
+        // and the module could never be unloaded. Owning the cleanup here makes the ordering
+        // a property of the code rather than of PowerShell's callback sequence.
+        //
+        // ResetHttpClient also calls ResiliencePipelineFactory.Reset internally, so both
+        // pieces of static state are released by this single call.
+        try
+        {
+            Base.MgxCmdletBase.ResetHttpClient();
+        }
+        catch (Exception ex)
+        {
+            // Never let teardown throw: a failure here would block module removal,
+            // which is the exact defect this ordering fixes.
+            System.Diagnostics.Debug.WriteLine($"[Mgx ALC] Cleanup on remove failed: {ex.Message}");
+        }
+
         AssemblyLoadContext.Default.Resolving -= ResolveDependency;
     }
 }

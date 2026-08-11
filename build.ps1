@@ -12,6 +12,25 @@ $DepsDir = Join-Path $ModuleRoot 'Dependencies'
 
 Write-Host "Building Mgx ($Configuration)..." -ForegroundColor Cyan
 
+# Version gate: MgxSdkVersion.Value is sent as the SdkVersion header on every Graph request,
+# so a stale value misreports the client in Microsoft's telemetry. It is a hand-maintained
+# const and drifted unnoticed for three releases - the header said 0.3.0 while the module
+# shipped 1.0.x. Checked before the compile so a mismatch fails in a second, not a minute.
+$manifestVersion = (Import-PowerShellDataFile (Join-Path $ModuleRoot 'mgx.psd1')).ModuleVersion
+$sdkVersionFile = Join-Path $PSScriptRoot 'src/Mgx.Engine/MgxSdkVersion.cs'
+$sdkVersionMatch = [regex]::Match(
+    (Get-Content $sdkVersionFile -Raw),
+    'Value\s*=\s*"mgx/(?<version>[^"]+)"')
+if (-not $sdkVersionMatch.Success) {
+    throw "Version gate failed: could not find the SDK version constant in $sdkVersionFile"
+}
+$sdkVersion = $sdkVersionMatch.Groups['version'].Value
+if ($sdkVersion -ne $manifestVersion) {
+    throw "Version gate failed: MgxSdkVersion.Value is 'mgx/$sdkVersion' but mgx.psd1 " +
+          "ModuleVersion is '$manifestVersion'. Update MgxSdkVersion.cs to match the manifest."
+}
+Write-Host "Version gate: mgx/$sdkVersion matches manifest" -ForegroundColor DarkGray
+
 # Clean previous build artifacts
 if (Test-Path $DepsDir) { Remove-Item $DepsDir -Recurse -Force }
 $binDir = Join-Path $ModuleRoot 'bin'

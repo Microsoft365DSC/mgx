@@ -17,3 +17,6 @@ module/*.pdb
 module/*.json
 module/Dependencies/
 module/.build-hash
+
+# tests (internal only)
+tests/

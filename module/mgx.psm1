@@ -12,11 +12,13 @@ if (Test-Path $CmdletsDll) {
     Write-Error "Mgx.Cmdlets.dll not found at $CmdletsDll. Did you run the build script?"
 }
 
-# Clean up static state on module removal to prevent resource leaks
-$MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
-    [Mgx.Cmdlets.Base.MgxCmdletBase]::ResetHttpClient()
-    [Mgx.Engine.Http.ResiliencePipelineFactory]::Reset()
-}
+# Static state cleanup on module removal is handled by AlcInitializer.OnRemove
+# (IModuleAssemblyCleanup in Mgx.Cmdlets.dll), NOT here.
+#
+# It cannot live in this scriptblock: PowerShell runs it after the module's
+# IModuleAssemblyCleanup callback, which detaches the ALC resolver. ResetHttpClient
+# needs Polly.Core, which is only resolvable through that handler, so calling it from
+# here threw and left the module permanently loaded.
 
 # Tab completion for Graph API resource paths
 $script:UriCompletions = @(
