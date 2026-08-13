@@ -40,6 +40,13 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     internal static volatile ResilientGraphClientOptions s_clientOptions = ResilientGraphClientOptions.Default;
 
     /// <summary>
+    /// Test-only transport override. When set, <see cref="GetClient"/> builds on the supplied
+    /// HttpClient and skips auth discovery, the Graph SDK reflection path and endpoint detection.
+    /// Shipping code never assigns it.
+    /// </summary>
+    internal static volatile Func<HttpClient>? s_testTransportFactory;
+
+    /// <summary>
     /// Base URL for Graph API requests (e.g., "https://graph.microsoft.com/v1.0").
     /// Respects sovereign clouds via GraphSession environment.
     /// </summary>
@@ -54,6 +61,12 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     protected ResilientGraphClient GetClient()
     {
         if (_client != null) return _client;
+
+        // Sits ahead of the auth check because with no Graph SDK in the process the fingerprint
+        // is empty and the cmdlet would terminate before reaching any HTTP work.
+        var testTransport = s_testTransportFactory;
+        if (testTransport != null)
+            return _client = ConfigureClient(testTransport(), s_clientOptions);
 
         var identity = GetCurrentAuthIdentity(WriteVerbose);
         if (string.IsNullOrEmpty(identity.Fingerprint))
@@ -157,13 +170,24 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         if (identityChanged)
             Cmdlets.Configuration.EnableMgxResilience.RefreshInjectedClient(WriteWarning, WriteVerbose);
 
-        _client = new ResilientGraphClient(httpClient, clientOptions);
-        _client.BodyReadTimeout = TimeSpan.FromSeconds(clientOptions.AttemptTimeoutSeconds);
-        _client.VerboseWriter = msg => WriteVerbose(msg);
-        _client.WarningWriter = msg => WriteWarning(msg);
-        _client.DebugWriter = msg => WriteDebug(msg);
-        _client.DebugEnabled = IsDebugRequested();
-        return _client;
+        return _client = ConfigureClient(httpClient, clientOptions);
+    }
+
+    /// <summary>
+    /// Wraps an HttpClient in a <see cref="ResilientGraphClient"/> wired to this cmdlet's output
+    /// streams. Shared by the production and test transport paths so both are wired identically.
+    /// </summary>
+    private ResilientGraphClient ConfigureClient(HttpClient httpClient, ResilientGraphClientOptions options)
+    {
+        var client = new ResilientGraphClient(httpClient, options)
+        {
+            BodyReadTimeout = TimeSpan.FromSeconds(options.AttemptTimeoutSeconds),
+            VerboseWriter = msg => WriteVerbose(msg),
+            WarningWriter = msg => WriteWarning(msg),
+            DebugWriter = msg => WriteDebug(msg)
+        };
+        client.DebugEnabled = IsDebugRequested();
+        return client;
     }
 
     /// <summary>

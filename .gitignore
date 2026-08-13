@@ -22,3 +22,8 @@ Modules/M365DSC.mgx/.build-hash
 TestResults/
 Tests/TestResults.xml
 *.trx
+coverage/
+artifacts/
+
+# Re-included from the blanket *.json above, since it pins the ReportGenerator version CI restores
+!.config/dotnet-tools.json

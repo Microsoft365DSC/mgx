@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Mgx.IntegrationTests" />
+    <InternalsVisibleTo Include="Mgx.E2ETests" />
   </ItemGroup>
 
   <ItemGroup>

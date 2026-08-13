@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Code coverage is now collected on every PR build and published to the GitHub Actions run summary, alongside a combined table of the xUnit, E2E and Pester results.
+- Added engine tests for `GraphBatchClient`, `PageIterator` and `ConcurrentFanOut`, which previously had no direct coverage: `$batch` chunking at 20 items, per-item 429 retry, the response-count guard, pagination and its SSRF rejection path, and bulk-write partial failure.
+- Added `Tests/Mgx.E2ETests`, which runs the cmdlets in a real runspace against a WireMock container serving canned Graph responses over HTTPS. HTTPS is required rather than incidental because `NextLinkValidator` drops any non-https `@odata.nextLink`. A plain-HTTP mock would end pagination after one page while still reporting success.
+- The CI workflow is now three jobs. Windows keeps the module build, unit tests and Pester surface tests. The E2E job runs on Linux because Windows runners cannot host Linux containers. A third job merges the coverage from both and writes the summary.
+- Internal: `MgxCmdletBase` gained an `internal static` transport override for tests that host the cmdlets without a Graph connection.
+
 ## 2.0.4
 
 - Fixed `Remove-Module M365DSC.mgx` failing and leaving the module permanently loaded. Static-state cleanup now runs in `AlcInitializer.OnRemove`, ahead of the ALC resolver detaching; it previously ran from the module's `OnRemove` scriptblock, which PowerShell invokes *after* that callback, by which point `Polly.Core` was no longer resolvable and the cleanup threw. Only triggered in sessions where no Graph request had run, because `Polly.Core` loads lazily.
