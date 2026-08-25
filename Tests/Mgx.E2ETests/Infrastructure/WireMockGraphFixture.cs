@@ -36,8 +36,7 @@ public sealed class WireMockGraphFixture : IAsyncLifetime
     {
         try
         {
-            _container = new ContainerBuilder()
-                .WithImage(Image)
+            _container = new ContainerBuilder(Image)
                 .WithPortBinding(AdminPort, assignRandomHostPort: true)
                 .WithPortBinding(GraphPort, assignRandomHostPort: true)
                 .WithCommand("--https-port", GraphPort.ToString(), "--disable-banner")
