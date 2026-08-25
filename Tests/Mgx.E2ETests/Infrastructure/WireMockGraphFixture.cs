@@ -14,7 +14,7 @@ namespace Mgx.E2ETests.Infrastructure;
 /// </summary>
 public sealed class WireMockGraphFixture : IAsyncLifetime
 {
-    private const string Image = "wiremock/wiremock:3.13.1";
+    private const string Image = "wiremock/wiremock:3.13.2";
     private const int AdminPort = 8080;
     private const int GraphPort = 8443;
 
