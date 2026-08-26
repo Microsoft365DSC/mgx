@@ -39,6 +39,7 @@ Merges upstream `gromedev/mgx` 2.1.1. The module name, version line, target fram
 
 ### Testing and CI
 
+- The test harness runs both suites behind one entry point and reports them the same way CI does: `## C# Unit Test Results`, `## C# Code Coverage` and `## PowerShell Unit Test Results`. The run summary and a local `Invoke-TestHarness` now share the same trx and Cobertura parsing, so they cannot drift.
 - The merged suite was de-duplicated: 119 tests were removed as filler or as duplicates of the same production behavior already covered on the other side, and the `Live`-tagged Pester blocks were dropped because this fork does not ship `tests/Live`. The xUnit suite runs serialized, since the cmdlet-hosting tests inject into process-wide static state.
 - Fixed the atomic checkpoint and delta-state save failing under a transient Windows sharing violation, which upstream's own concurrency test caught.
 - Code coverage is now collected on every PR build and published to the GitHub Actions run summary, alongside a combined table of the xUnit, E2E and Pester results.

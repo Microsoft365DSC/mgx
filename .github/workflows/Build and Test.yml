@@ -61,19 +61,20 @@ jobs:
           New-Item -ItemType Directory -Force -Path TestResults/windows | Out-Null
           Import-Module './tests/TestHarness.psm1' -Force
 
-          $results = Invoke-TestHarness -IgnoreCodeCoverage
+          # The xUnit suite already ran in its own step above, so only Pester runs here
+          $results = Invoke-TestHarness -SkipDotNetTests
 
           # Handed to the report job directly, since the run object is the authoritative count
           [pscustomobject]@{
               Suite   = 'Pester - module surface'
-              Passed  = $results.PassedCount
-              Failed  = $results.FailedCount
-              Skipped = $results.SkippedCount
+              Passed  = $results.Pester.PassedCount
+              Failed  = $results.Pester.FailedCount
+              Skipped = $results.Pester.SkippedCount
           } | ConvertTo-Json | Set-Content -Path TestResults/windows/pester-summary.json -Encoding utf8
 
-          if ($results.FailedCount -gt 0)
+          if ($results.Pester.FailedCount -gt 0)
           {
-              throw "$($results.FailedCount) Pester test(s) failed"
+              throw "$($results.Pester.FailedCount) Pester test(s) failed"
           }
 
       - name: Validate Module Manifest
@@ -170,7 +171,7 @@ jobs:
           dotnet reportgenerator \
             -reports:"artifacts/**/coverage.cobertura.xml" \
             -targetdir:coverage/report \
-            -reporttypes:"MarkdownSummaryGithub;Html;Cobertura"
+            -reporttypes:"Html;Cobertura"
 
       - name: Write Run Summary
         shell: pwsh

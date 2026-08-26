@@ -10,9 +10,13 @@ Every command below runs from the repository root, not from this directory.
 1. **Both suites, both platforms.**
 
    ```powershell
-   dotnet test tests/Mgx.IntegrationTests/Mgx.IntegrationTests.csproj
-   pwsh -c 'Invoke-Pester -Path ./tests/Unit'
+   Import-Module ./tests/TestHarness.psm1 -Force
+   Invoke-TestHarness
    ```
+
+   One call runs the xUnit and Pester suites and prints the same C# and PowerShell sections CI
+   writes to the run summary. The E2E suite is not included, since it needs a Linux container
+   host.
 
    Run them on Windows too. A green run on one OS says nothing about file locking, path
    comparison or the exceptions Windows raises where Unix raises different ones - each of those

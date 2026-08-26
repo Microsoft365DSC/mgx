@@ -2,15 +2,15 @@
 
 <#
     .SYNOPSIS
-        Pester harness for the mgx module.
+        Test harness for the mgx module.
 
     .DESCRIPTION
-        Wraps Invoke-Pester so CI and local runs share one entry point.
-        These tests cover the PowerShell-facing surface only: the module manifest,
-        the format file, and the cmdlet/parameter contract of the built module.
+        Runs both suites behind one entry point and reports them the same way:
+        the xUnit suite in tests/Mgx.IntegrationTests, and the Pester suite in
+        tests/Unit covering the PowerShell-facing surface.
 
-        Engine and cmdlet internals (HTTP retry, pagination, JSON conversion) are
-        covered by the xUnit suite in tests/Mgx.IntegrationTests, run via `dotnet test`.
+        The E2E suite in tests/Mgx.E2ETests is not run here. It needs a Linux
+        container host, so CI runs it as its own job.
 #>
 
 $script:RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -38,43 +38,248 @@ function Get-MgxTestPath
     }
 }
 
-function Invoke-TestHarness
+function Get-TrxSummary
 {
     <#
         .SYNOPSIS
-            Run the Pester test suite for the mgx module.
+            Read the pass, fail and skip counts out of a .trx file.
 
-        .PARAMETER TestResultsFile
-            NUnit XML results path. Defaults to tests/TestResults.xml.
-
-        .PARAMETER IgnoreCodeCoverage
-            Skip code coverage. Coverage of a binary module from Pester is not
-            meaningful (there is no PowerShell source to instrument), so coverage
-            is never collected; the switch exists for CI call compatibility.
-
-        .PARAMETER TestPath
-            Directory to search for *.Tests.ps1. Defaults to tests/Unit.
-
-        .OUTPUTS
-            The Pester run object. Callers check $result.FailedCount.
+        .PARAMETER Path
+            The .trx written by dotnet test.
     #>
     [CmdletBinding()]
+    [OutputType([System.Collections.Hashtable])]
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [System.String]
+        $Path
+    )
+
+    $summary = @{
+        Total   = 0
+        Passed  = 0
+        Failed  = 0
+        Skipped = 0
+    }
+
+    if (-not (Test-Path -Path $Path))
+    {
+        return $summary
+    }
+
+    $document = [System.Xml.XmlDocument]::new()
+    $document.Load($Path)
+
+    $namespaceManager = [System.Xml.XmlNamespaceManager]::new($document.NameTable)
+    $namespaceManager.AddNamespace('trx', 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010')
+
+    $counters = $document.SelectSingleNode('//trx:ResultSummary/trx:Counters', $namespaceManager)
+    if ($null -eq $counters)
+    {
+        return $summary
+    }
+
+    $summary.Total = [int]$counters.total
+    $summary.Passed = [int]$counters.passed
+    # An errored test is a failed test as far as a reader of the summary is concerned
+    $summary.Failed = [int]$counters.failed + [int]$counters.error
+    $summary.Skipped = [int]$counters.total - [int]$counters.executed
+
+    return $summary
+}
+
+function Get-CoberturaSummary
+{
+    <#
+        .SYNOPSIS
+            Roll a Cobertura report up to one line-coverage figure per type.
+
+        .PARAMETER Path
+            The cobertura XML written by the coverage collector.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Collections.Hashtable])]
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [System.String]
+        $Path
+    )
+
+    if (-not (Test-Path -Path $Path))
+    {
+        return @{
+            CoveragePercent = 0
+            LinesCovered    = 0
+            LinesValid      = 0
+            Classes         = @()
+        }
+    }
+
+    $document = [System.Xml.XmlDocument]::new()
+    $document.Load($Path)
+
+    $byType = [ordered]@{}
+    $totalLines = 0
+    $coveredLines = 0
+
+    foreach ($class in $document.SelectNodes('//class'))
+    {
+        # Compiler-generated closures and async state machines belong to the type that declares
+        # them, so they are folded back into it. The separator is the collector's choice: coverlet
+        # writes Type/<Method>d__0, other emitters use . or +
+        $typeName = $class.name -replace '[./+]<.*$', ''
+
+        if (-not $byType.Contains($typeName))
+        {
+            $byType[$typeName] = @{ Covered = 0; Total = 0 }
+        }
+
+        foreach ($line in $class.SelectNodes('lines/line'))
+        {
+            $byType[$typeName].Total++
+            $totalLines++
+
+            if ([int]$line.hits -gt 0)
+            {
+                $byType[$typeName].Covered++
+                $coveredLines++
+            }
+        }
+    }
+
+    $classes = foreach ($typeName in $byType.Keys)
+    {
+        $entry = $byType[$typeName]
+        [PSCustomObject]@{
+            Name            = $typeName
+            LinesCovered    = $entry.Covered
+            LinesValid      = $entry.Total
+            CoveragePercent = if ($entry.Total -gt 0) { [System.Math]::Round($entry.Covered / $entry.Total * 100, 2) } else { 0 }
+        }
+    }
+
+    return @{
+        CoveragePercent = if ($totalLines -gt 0) { [System.Math]::Round($coveredLines / $totalLines * 100, 2) } else { 0 }
+        LinesCovered    = $coveredLines
+        LinesValid      = $totalLines
+        # Least covered first, since that is the part worth reading
+        Classes         = @($classes | Sort-Object -Property CoveragePercent)
+    }
+}
+
+function Invoke-DotNetTest
+{
+    <#
+        .SYNOPSIS
+            Run the xUnit suite and return its counts and coverage.
+
+        .PARAMETER Configuration
+            Build configuration to test against.
+
+        .PARAMETER IgnoreCodeCoverage
+            Skip coverage collection.
+
+        .PARAMETER NoBuild
+            Test the existing build output instead of rebuilding.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Collections.Hashtable])]
     param
     (
         [Parameter()]
         [System.String]
-        $TestResultsFile = (Join-Path $PSScriptRoot 'TestResults.xml'),
+        $Configuration = 'Release',
 
         [Parameter()]
         [Switch]
         $IgnoreCodeCoverage,
 
         [Parameter()]
-        [System.String]
-        $TestPath = (Join-Path $PSScriptRoot 'Unit'),
+        [Switch]
+        $NoBuild
+    )
 
-        # Live-tagged blocks need a real Graph session. They are excluded by default so CI
-        # and a cold clone both pass; pass this to run them against a connected tenant.
+    $projectPath = Join-Path $script:RepoRoot 'tests' 'Mgx.IntegrationTests' 'Mgx.IntegrationTests.csproj'
+    $resultsDirectory = Join-Path $script:RepoRoot 'TestResults' 'harness'
+    $trxFileName = 'Mgx.IntegrationTests.trx'
+
+    if (Test-Path -Path $resultsDirectory)
+    {
+        Remove-Item -Path $resultsDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -Path $resultsDirectory -ItemType Directory -Force | Out-Null
+
+    $arguments = @(
+        'test', $projectPath
+        '--configuration', $Configuration
+        '--logger', "trx;LogFileName=$trxFileName"
+        '--results-directory', $resultsDirectory
+        '--nologo'
+    )
+
+    if ($NoBuild.IsPresent)
+    {
+        $arguments += '--no-build'
+    }
+
+    if (-not $IgnoreCodeCoverage.IsPresent)
+    {
+        $arguments += @(
+            '--settings', (Join-Path $script:RepoRoot 'tests' 'coverlet.runsettings')
+            '--collect:XPlat Code Coverage'
+        )
+    }
+
+    Write-Host -Object 'Running all mgx C# Unit Tests'
+    & dotnet @arguments | Out-Host
+
+    $result = Get-TrxSummary -Path (Join-Path $resultsDirectory $trxFileName)
+
+    $result.Coverage = if ($IgnoreCodeCoverage.IsPresent)
+    {
+        $null
+    }
+    else
+    {
+        # The XPlat collector writes into a per-run subdirectory, so the file is found rather
+        # than named
+        $cobertura = Get-ChildItem -Path $resultsDirectory -Recurse -Filter 'coverage.cobertura.xml' -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+        if ($null -eq $cobertura) { $null } else { Get-CoberturaSummary -Path $cobertura.FullName }
+    }
+
+    return $result
+}
+
+function Invoke-PesterTest
+{
+    <#
+        .SYNOPSIS
+            Run the Pester suite against the built module.
+
+        .PARAMETER TestResultsFile
+            NUnit XML results path.
+
+        .PARAMETER TestPath
+            Directory to search for *.Tests.ps1.
+
+        .PARAMETER IncludeLive
+            Include Live-tagged blocks, which need a connected tenant.
+    #>
+    [CmdletBinding()]
+    param
+    (
+        [Parameter()]
+        [System.String]
+        $TestResultsFile,
+
+        [Parameter()]
+        [System.String]
+        $TestPath,
+
         [Parameter()]
         [Switch]
         $IncludeLive
@@ -96,7 +301,6 @@ function Invoke-TestHarness
 
     Import-Module -Name $pesterModule.Path -Force
 
-    # The module must be built before the surface tests can inspect it
     if (-not (Test-Path -Path $script:ManifestPath))
     {
         throw "Module manifest not found at '$script:ManifestPath'. Run ./build.ps1 first."
@@ -114,20 +318,132 @@ function Invoke-TestHarness
     $configuration.TestResult.OutputFormat = 'NUnitXml'
     $configuration.TestResult.OutputPath = $TestResultsFile
 
-    # Binary module: there is no PowerShell code to instrument, so coverage is
-    # never enabled. -IgnoreCodeCoverage is accepted for CI call compatibility.
+    # M365DSC.mgx is a binary module. There is no PowerShell source to instrument, so Pester
+    # coverage is never collected and the report carries no PowerShell coverage section
     $configuration.CodeCoverage.Enabled = $false
 
-    if (-not $IgnoreCodeCoverage.IsPresent)
-    {
-        Write-Verbose -Message 'Code coverage is not collected for a binary module; continuing without it.'
-    }
+    Write-Host -Object 'Running all mgx PowerShell Unit Tests'
+    return Invoke-Pester -Configuration $configuration
+}
 
-    $results = Invoke-Pester -Configuration $configuration
+<#
+.SYNOPSIS
+    Runs the mgx C# and PowerShell test suites and collects their results.
 
+.DESCRIPTION
+    Runs the xUnit suite with Cobertura coverage and the Pester suite against the staged module,
+    and returns both as a single object. Failures are reported rather than thrown, so the caller
+    decides how to fail the build.
+
+.PARAMETER TestResultsFile
+    NUnit XML results path for the Pester run. Defaults to tests/TestResults.xml.
+
+.PARAMETER TestPath
+    Directory to search for *.Tests.ps1. Defaults to tests/Unit.
+
+.PARAMETER IgnoreCodeCoverage
+    Skips coverage collection for the C# suite. Pester coverage is never collected, because the
+    module is binary.
+
+.PARAMETER IncludeLive
+    Includes Live-tagged Pester blocks, which need a connected tenant.
+
+.PARAMETER SkipDotNetTests
+    Runs only the PowerShell suite.
+
+.PARAMETER SkipPesterTests
+    Runs only the C# suite.
+
+.PARAMETER NoBuild
+    Tests the existing build output instead of rebuilding.
+
+.PARAMETER Configuration
+    Build configuration to test against. Defaults to Release.
+
+.OUTPUTS
+    An object with Pester, DotNet and Duration. Callers check $result.Pester.FailedCount and
+    $result.DotNet.Failed.
+
+.EXAMPLE
+    $results = Invoke-TestHarness
     Write-TestHarnessSummary -Result $results
 
-    return $results
+.EXAMPLE
+    Invoke-TestHarness -SkipDotNetTests -NoBuild
+#>
+function Invoke-TestHarness
+{
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param
+    (
+        [Parameter()]
+        [System.String]
+        $TestResultsFile = (Join-Path $PSScriptRoot 'TestResults.xml'),
+
+        [Parameter()]
+        [System.String]
+        $TestPath = (Join-Path $PSScriptRoot 'Unit'),
+
+        [Parameter()]
+        [Switch]
+        $IgnoreCodeCoverage,
+
+        [Parameter()]
+        [Switch]
+        $IncludeLive,
+
+        [Parameter()]
+        [Switch]
+        $SkipDotNetTests,
+
+        [Parameter()]
+        [Switch]
+        $SkipPesterTests,
+
+        [Parameter()]
+        [Switch]
+        $NoBuild,
+
+        [Parameter()]
+        [ValidateSet('Debug', 'Release')]
+        [System.String]
+        $Configuration = 'Release'
+    )
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+    $dotNetResults = $null
+    if (-not $SkipDotNetTests.IsPresent)
+    {
+        $dotNetResults = Invoke-DotNetTest -Configuration $Configuration `
+            -IgnoreCodeCoverage:$IgnoreCodeCoverage `
+            -NoBuild:$NoBuild
+    }
+
+    $pesterResults = $null
+    if (-not $SkipPesterTests.IsPresent)
+    {
+        $pesterResults = Invoke-PesterTest -TestResultsFile $TestResultsFile `
+            -TestPath $TestPath `
+            -IncludeLive:$IncludeLive
+    }
+
+    $stopwatch.Stop()
+
+    $message = 'Running the tests took {0} hours, {1} minutes, {2} seconds' -f `
+        $stopwatch.Elapsed.Hours, $stopwatch.Elapsed.Minutes, $stopwatch.Elapsed.Seconds
+    Write-Host -Object $message
+
+    $result = [PSCustomObject]@{
+        Pester   = $pesterResults
+        DotNet   = $dotNetResults
+        Duration = $stopwatch.Elapsed
+    }
+
+    Write-TestHarnessSummary -Result $result
+
+    return $result
 }
 
 <#
@@ -135,8 +451,8 @@ function Invoke-TestHarness
     Renders the results of Invoke-TestHarness as a report.
 
 .DESCRIPTION
-    Writes the test counts and the per file code coverage of the run. Without a path the report
-    goes to the console, with a path it is appended as GitHub flavoured markdown, which makes it
+    Writes a combined test and coverage report for both suites. Without a path the report goes
+    to the console, with a path it is appended as GitHub flavoured markdown, which makes it
     usable as a GitHub Actions step summary.
 
 .PARAMETER Result
@@ -165,57 +481,41 @@ function Write-TestHarnessSummary
 
     $lines = [System.Collections.Generic.List[System.String]]::new()
 
-    $lines.Add('## Unit Test Results')
-    $lines.Add('')
-    $lines.Add('| Passed | Failed | Skipped |')
-    $lines.Add('| ---: | ---: | ---: |')
-    $lines.Add("| $($Result.PassedCount) | $($Result.FailedCount) | $($Result.SkippedCount) |")
-    $lines.Add('')
-
-    $coverage = $Result.CodeCoverage
-    if ($null -ne $coverage)
+    if ($null -ne $Result.DotNet)
     {
-        $lines.Add('## Code Coverage')
+        $lines.Add('## C# Unit Test Results')
         $lines.Add('')
-        $lines.Add("**$([System.Math]::Round($coverage.CoveragePercent, 2))%** of $($coverage.CommandsAnalyzedCount) commands covered.")
+        $lines.Add('| Passed | Failed | Skipped |')
+        $lines.Add('| ---: | ---: | ---: |')
+        $lines.Add("| $($Result.DotNet.Passed) | $($Result.DotNet.Failed) | $($Result.DotNet.Skipped) |")
         $lines.Add('')
-        $lines.Add('| File | Covered | Missed |')
-        $lines.Add('| :--- | ---: | ---: |')
 
-        $perFile = @{}
-        foreach ($command in @($coverage.CommandsExecuted) + @($coverage.CommandsMissed))
+        if ($null -ne $Result.DotNet.Coverage)
         {
-            if ($null -eq $command)
+            $coverage = $Result.DotNet.Coverage
+            $lines.Add('## C# Code Coverage')
+            $lines.Add('')
+            $lines.Add("**$($coverage.CoveragePercent)%** of $($coverage.LinesValid) lines covered.")
+            $lines.Add('')
+            $lines.Add('| Type | Covered | Missed |')
+            $lines.Add('| :--- | ---: | ---: |')
+
+            foreach ($class in $coverage.Classes)
             {
-                continue
+                $lines.Add("| $($class.Name) | $($class.CoveragePercent)% | $($class.LinesValid - $class.LinesCovered) |")
             }
 
-            if (-not $perFile.ContainsKey($command.File))
-            {
-                $perFile[$command.File] = @{ Analyzed = 0; Missed = 0 }
-            }
-
-            $perFile[$command.File].Analyzed++
+            $lines.Add('')
         }
+    }
 
-        foreach ($command in @($coverage.CommandsMissed))
-        {
-            if ($null -eq $command)
-            {
-                continue
-            }
-
-            $perFile[$command.File].Missed++
-        }
-
-        foreach ($file in ($perFile.Keys | Sort-Object))
-        {
-            $analyzed = $perFile[$file].Analyzed
-            $missed = $perFile[$file].Missed
-            $percentage = [System.Math]::Round(($analyzed - $missed) / $analyzed * 100, 2)
-            $lines.Add("| $(Split-Path -Path $file -Leaf) | $percentage% | $missed |")
-        }
-
+    if ($null -ne $Result.Pester)
+    {
+        $lines.Add('## PowerShell Unit Test Results')
+        $lines.Add('')
+        $lines.Add('| Passed | Failed | Skipped |')
+        $lines.Add('| ---: | ---: | ---: |')
+        $lines.Add("| $($Result.Pester.PassedCount) | $($Result.Pester.FailedCount) | $($Result.Pester.SkippedCount) |")
         $lines.Add('')
     }
 
@@ -229,4 +529,5 @@ function Write-TestHarnessSummary
     }
 }
 
-Export-ModuleMember -Function Invoke-TestHarness, Get-MgxTestPath, Write-TestHarnessSummary
+Export-ModuleMember -Function Invoke-TestHarness, Invoke-DotNetTest, Invoke-PesterTest,
+    Get-MgxTestPath, Get-TrxSummary, Get-CoberturaSummary, Write-TestHarnessSummary
