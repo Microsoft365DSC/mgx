@@ -10,7 +10,7 @@
         the format file, and the cmdlet/parameter contract of the built module.
 
         Engine and cmdlet internals (HTTP retry, pagination, JSON conversion) are
-        covered by the xUnit suite in Tests/Mgx.IntegrationTests, run via `dotnet test`.
+        covered by the xUnit suite in tests/Mgx.IntegrationTests, run via `dotnet test`.
 #>
 
 $script:RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -53,7 +53,7 @@ function Invoke-TestHarness
             is never collected; the switch exists for CI call compatibility.
 
         .PARAMETER TestPath
-            Directory to search for *.Tests.ps1. Defaults to Tests/Unit.
+            Directory to search for *.Tests.ps1. Defaults to tests/Unit.
 
         .OUTPUTS
             The Pester run object. Callers check $result.FailedCount.
