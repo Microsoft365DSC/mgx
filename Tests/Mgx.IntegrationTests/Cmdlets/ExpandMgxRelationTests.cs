@@ -27,12 +27,6 @@ public class ExpandMgxRelationTests
         var result = method!.Invoke(null, parameters);
         return (T)result!;
     }
-    [Fact]
-    public void ProcessRecord_MissingIdPlaceholder_ThrowsError()
-    {
-        // Skip: test host doesn't trigger the validation path properly
-        Assert.True(true);
-    }
 
     [Fact]
     public void ProcessRecord_SearchRequiresConsistencyLevel_ThrowsError()

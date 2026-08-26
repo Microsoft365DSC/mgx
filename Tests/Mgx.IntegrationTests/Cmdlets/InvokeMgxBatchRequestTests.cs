@@ -88,20 +88,6 @@ public class InvokeMgxBatchRequestTests
     }
 
     [Fact]
-    public void ParsePipelineInput_InvalidMethod_ReturnsNull()
-    {
-        // Skip: requires WriteWarning which is not implemented in test host
-        Assert.True(true);
-    }
-
-    [Fact]
-    public void ParsePipelineInput_MissingUrl_ReturnsNull()
-    {
-        // Skip: requires WriteWarning which is not implemented in test host
-        Assert.True(true);
-    }
-
-    [Fact]
     public void NormalizeToRelativeUrl_HandlesAbsoluteUrl()
     {
         var cmdlet = new InvokeMgxBatchRequest { ApiVersion = "v1.0" };
@@ -123,20 +109,6 @@ public class InvokeMgxBatchRequestTests
         var cmdlet = new InvokeMgxBatchRequest { ApiVersion = "beta" };
         var url = InvokeMethod<string>(cmdlet, "NormalizeToRelativeUrl", "https://graph.microsoft.com/beta/groups/123");
         Assert.Equal("/groups/123", url);
-    }
-
-    [Fact]
-    public void RedactSensitiveFields_RedactsKnownFields()
-    {
-        // Skip: JsonNode type handling issues in test environment
-        Assert.True(true);
-    }
-
-    [Fact]
-    public void RedactSensitiveFields_RedactsNestedFields()
-    {
-        // Skip: JSON node array access needs different approach
-        Assert.True(true);
     }
 
     [Fact]

@@ -95,20 +95,6 @@ public class GraphBatchClientCoverageTests
     }
 
     [Fact]
-    public async Task ExecuteBatchIndexedAsync_Chunking_MultipleBatches()
-    {
-        // Skip: requires proper chunking response handling
-        Assert.True(true);
-    }
-
-    [Fact]
-    public async Task ExecuteBatchIndexedAsync_ThrottledItem_Retries()
-    {
-        // Skip: throttle retry count tracking is complex
-        Assert.True(true);
-    }
-
-    [Fact]
     public async Task ExecuteBatchIndexedAsync_FailedItem_TelemetryRecordsFailure()
     {
         var handler = new StubHttpMessageHandler().EnqueueJson(HttpStatusCode.OK, """
@@ -137,20 +123,6 @@ public class GraphBatchClientCoverageTests
         Assert.Single(result.Results);
         Assert.Equal(404, result.Results[0].Response.Status);
         Assert.Equal(1, result.Telemetry.Failed);
-    }
-
-[Fact]
-    public async Task ExecuteBatchIndexedAsync_WithItemHeaders_IncludesHeaders()
-    {
-        // Skip: header capture requires more complex stub setup
-        Assert.True(true);
-    }
-
-    [Fact]
-    public async Task ExecuteBatchIndexedAsync_WithBody_IncludesBody()
-    {
-        // Skip: body capture requires more complex stub setup
-        Assert.True(true);
     }
 
     [Fact]

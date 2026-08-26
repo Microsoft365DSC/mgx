@@ -61,13 +61,6 @@ public class GraphBatchClientCoverageTests2
         Batch(requests.Select(r => Item(r.Id, 200, "{\"url\":\"" + r.Url + "\"}")));
 
     [Fact]
-    public async Task BatchItemsPerSecond_EnforcesRateLimit()
-    {
-        // Skip: rate limiting test is complex and has JSON parsing issues in test environment
-        Assert.True(true);
-    }
-
-    [Fact]
     public async Task BatchChunkConcurrency_RespectsConcurrencyLimit()
     {
         var concurrentRequests = 0;
