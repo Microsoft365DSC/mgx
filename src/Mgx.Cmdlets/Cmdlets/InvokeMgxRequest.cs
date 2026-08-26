@@ -14,8 +14,8 @@ namespace Mgx.Cmdlets.Cmdlets;
 /// <summary>
 /// Invoke-MgxRequest: General-purpose resilient client for any Microsoft Graph endpoint.
 /// Supports streaming pagination, fan-out concurrency, write operations, and checkpoint/resume.
-/// For bulk writes (>10 items), consider Invoke-MgxBatchRequest (measured ~1.5x faster
-/// than fan-out for PATCH at 1k scale; fewer HTTP round-trips and server-side pacing).
+/// For bulk writes, Invoke-MgxBatchRequest is faster than fan-out: fewer round-trips and
+/// server-side pacing.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "MgxRequest", DefaultParameterSetName = "Direct",
     SupportsShouldProcess = true)]
@@ -101,10 +101,6 @@ public class InvokeMgxRequest : MgxCmdletBase
 
     #region Fan-out parameters
 
-    /// <summary>
-    /// Entity ID, or an object carrying one. Accepts a plain string, a Hashtable (what the
-    /// Mgx cmdlets emit), or a PSCustomObject; the 'id' member is extracted in ProcessRecord.
-    /// </summary>
     [Parameter(ValueFromPipeline = true, ParameterSetName = "Pipeline")]
     [Alias("Id")]
     public object? InputObject { get; set; }
@@ -124,14 +120,8 @@ public class InvokeMgxRequest : MgxCmdletBase
     private readonly List<string> _pipelineIds = [];
     private bool _isFanOut;
 
-    /// <summary>
-    /// Full base URL including API version (e.g., "https://graph.microsoft.com/v1.0").
-    /// </summary>
     private string VersionedBaseUrl => $"{s_graphEndpoint}/{ApiVersion}";
 
-    /// <summary>
-    /// Whether the current invocation is a collection/list operation.
-    /// </summary>
     private bool IsCollectionMode =>
         All.IsPresent || Top > 0 || !string.IsNullOrEmpty(Filter) ||
         !string.IsNullOrEmpty(Search) || Sort is { Length: > 0 } ||
@@ -141,7 +131,7 @@ public class InvokeMgxRequest : MgxCmdletBase
     {
         _isFanOut = Uri.Contains("{id}", StringComparison.OrdinalIgnoreCase);
 
-        // $search requires ConsistencyLevel: eventual. Error if missing (data loss otherwise)
+        // $search requires ConsistencyLevel eventual, and omitting it loses data silently
         if (!string.IsNullOrEmpty(Search) && string.IsNullOrEmpty(ConsistencyLevel))
         {
             ThrowTerminatingError(new ErrorRecord(
@@ -151,8 +141,8 @@ public class InvokeMgxRequest : MgxCmdletBase
             return;
         }
 
-        // $count=true requires ConsistencyLevel: eventual on directory endpoints;
-        // auto-add when -CountVariable or -Filter is used (enables count discrepancy detection)
+        // $count=true needs ConsistencyLevel eventual on directory endpoints, added automatically
+        // for -CountVariable and -Filter so discrepancy detection works
         if ((!string.IsNullOrEmpty(CountVariable) || !string.IsNullOrEmpty(Filter))
             && string.IsNullOrEmpty(ConsistencyLevel))
         {
@@ -160,7 +150,7 @@ public class InvokeMgxRequest : MgxCmdletBase
             WriteVerbose("Auto-adding ConsistencyLevel:eventual header (required by -Filter/-CountVariable for $count=true).");
         }
 
-        // $skip is not supported by most Graph directory endpoints (silently ignored)
+        // Most Graph directory endpoints ignore $skip silently
         if (Skip > 0)
             WriteWarning("-Skip ($skip) is not supported by many Graph API endpoints (e.g., /users, /groups). The parameter may be silently ignored.");
     }
@@ -265,13 +255,13 @@ public class InvokeMgxRequest : MgxCmdletBase
 
     private void ExecuteList(string relativeUri, string? sourceId)
     {
-        // Track whether $count=true was auto-added (not user-requested via -CountVariable).
+        // Whether $count=true was added automatically rather than requested
         // If the endpoint rejects it with 400, retry without.
         bool countAutoAdded = !string.IsNullOrEmpty(Filter) && string.IsNullOrEmpty(CountVariable);
         bool includeAutoCount = countAutoAdded;
         bool suppressTop = false;
 
-        // Consumer-owned checkpoint: resolve path once before the retry loop
+        // Resolve the consumer-owned checkpoint path once, before the retry loop
         var cpPath = CheckpointPath != null
             ? GetUnresolvedProviderPathFromPSPath(CheckpointPath)
             : null;
@@ -294,10 +284,9 @@ public class InvokeMgxRequest : MgxCmdletBase
                     includeCount: !string.IsNullOrEmpty(CountVariable) || includeAutoCount,
                     noPageSize: suppressTop);
                 var iterator = new PageIterator(GetClient());
-                // -All says how far to page, -Top says how much to return, and they are not the
-                // same question: -All used to zero the cap, so asking for a bounded slice of a
-                // large collection walked all of it. Worse, -Top also sets the page size, so the
-                // walk ran at the slice's page size - 150 rows at a time across the whole tenant.
+                // -All says how far to page and -Top how much to return, which are different
+                // questions. -All must not zero the cap, or a bounded slice walks the whole
+                // collection at the slice page size
                 var maxItems = Top > 0 ? Top : 0;
                 var headers = BuildHeaders();
                 long itemCount = 0;
@@ -320,10 +309,9 @@ public class InvokeMgxRequest : MgxCmdletBase
                             var validated = NextLinkValidator.Validate(checkpoint.NextLink, expectedHost);
                             if (validated != null && checkpoint.ItemsCollected >= 0)
                             {
-                                // Page-boundary only: skipOnFirstPage = 0 because pipeline items are
-                                // ephemeral (no file to dedup against). On resume, the interrupted page
-                                // may re-emit items already sent downstream. Downstream consumers
-                                // (e.g., Export-Csv -Append) are responsible for their own dedup.
+                                // Page-boundary only. Pipeline items are ephemeral with no file to
+                                // dedup against, so a resumed page may re-emit items already sent
+                                // and the consumer owns deduplication
                                 resume = new ResumeState(validated, 0, checkpoint.ItemsCollected);
                             }
                             else
@@ -383,7 +371,7 @@ public class InvokeMgxRequest : MgxCmdletBase
                 }
                 catch (PipelineStoppedException)
                 {
-                    // Pipeline consumer is done (e.g., Select-Object -First N); stop gracefully
+                    // The pipeline consumer is done, such as Select-Object -First, so stop
                     throw;
                 }
                 finally
@@ -410,7 +398,7 @@ public class InvokeMgxRequest : MgxCmdletBase
             }
             catch (GraphServiceException ex) when (includeAutoCount && countAutoAdded && ex.StatusCode == HttpStatusCode.BadRequest)
             {
-                // Auto-added $count=true rejected by this endpoint; retry without it
+                // This endpoint rejects the automatic $count=true, so retry without it
                 WriteVerbose("Endpoint rejected $count=true (HTTP 400). Retrying without count parameter.");
                 includeAutoCount = false;
                 continue;
@@ -421,7 +409,7 @@ public class InvokeMgxRequest : MgxCmdletBase
                 && ex.StatusCode == HttpStatusCode.BadRequest
                 && string.Equals(ex.ErrorCode, "Request_UnsupportedQuery", StringComparison.OrdinalIgnoreCase))
             {
-                // Endpoint doesn't support $top (e.g., /directoryRoles). Retry without page size.
+                // This endpoint does not support $top, so retry without a page size
                 WriteVerbose("Endpoint rejected $top (Request_UnsupportedQuery). Retrying without page size.");
                 suppressTop = true;
                 continue;
@@ -508,8 +496,8 @@ public class InvokeMgxRequest : MgxCmdletBase
                 if (response.StatusCode == HttpStatusCode.NoContent)
                     return;
 
-                // stream.Length throws NotSupportedException on network/decompression streams.
-                // Read as bytes to safely handle null ContentLength (chunked transfer) and empty bodies.
+                // stream.Length throws on network and decompression streams, so read bytes to
+                // handle a null ContentLength and empty bodies
                 var bodyBytes = response.Content.ReadAsByteArrayAsync(CancellationToken).GetAwaiter().GetResult();
                 if (bodyBytes.Length > 0)
                 {
@@ -554,18 +542,18 @@ public class InvokeMgxRequest : MgxCmdletBase
 
         if (_pipelineIds.Count == 1)
         {
-            // Single ID: direct execution, no ConcurrentFanOut overhead
+            // A single id runs directly, without the fan-out machinery
             var resolved = ResolveTemplate(_pipelineIds[0]);
             ExecuteRequest(resolved, _pipelineIds[0]);
             return;
         }
 
-        // Deduplicate pipeline IDs to avoid dict key collision and redundant HTTP calls
+        // Deduplicated to avoid key collisions and repeat requests
         var uniqueIds = _pipelineIds.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (uniqueIds.Count < _pipelineIds.Count)
             WriteVerbose($"Deduplicated {_pipelineIds.Count} pipeline IDs to {uniqueIds.Count} unique IDs.");
 
-        // Ensure client is initialized (populates s_graphEndpoint for sovereign clouds)
+        // Initializes the client, which populates s_graphEndpoint for sovereign clouds
         var client = GetClient();
         var fanOut = new ConcurrentFanOut(client, Concurrency);
         var headers = BuildHeaders();
@@ -589,10 +577,6 @@ public class InvokeMgxRequest : MgxCmdletBase
         }
     }
 
-    /// <summary>
-    /// Collection fan-out: each ID resolves to a collection endpoint (e.g., /groups/{id}/members).
-    /// Uses FetchAllAsync which calls GetCollectionPageAsync (expects "value" array).
-    /// </summary>
     private void ExecuteCollectionFanOut(ConcurrentFanOut fanOut, List<string> uniqueIds, Dictionary<string, string>? headers)
     {
         var urls = uniqueIds.Select(id => BuildCollectionUrl(ResolveTemplate(id), includeCount: false)).ToList();
@@ -624,10 +608,6 @@ public class InvokeMgxRequest : MgxCmdletBase
         HandleFanOutErrors(fanOutResult.Errors);
     }
 
-    /// <summary>
-    /// Entity fan-out: each ID resolves to a single entity endpoint (e.g., /users/{id}).
-    /// Uses ForEachAsync with GetAsync per entity since the response is a flat object, not a collection.
-    /// </summary>
     private void ExecuteEntityFanOut(ConcurrentFanOut fanOut, List<string> uniqueIds, Dictionary<string, string>? headers)
     {
         // Clear results from any previous invocation
@@ -655,13 +635,12 @@ public class InvokeMgxRequest : MgxCmdletBase
                     using var stream = await response.Content.ReadAsStreamAsync(ct);
                     var json = await JsonSerializer.DeserializeAsync<JsonElement>(stream, cancellationToken: ct);
 
-                    // Clone JsonElement to detach from the parent JsonDocument's buffer.
-                    // Without Clone(), the JsonElement holds a reference to the document's internal
-                    // memory, which could become invalid after the response stream is disposed.
+                    // Clone detaches from the parent JsonDocument buffer, which becomes invalid
+                    // once the response stream is disposed
                     var cloned = json.Clone();
 
-                    // Must marshal back to the cmdlet thread for WriteObject
-                    // ConcurrentFanOut collects results; we output them after
+                    // WriteObject must run on the cmdlet thread, so ConcurrentFanOut collects
+                    // results and they are written afterwards
                     // Store in a thread-safe structure
                     lock (_entityFanOutResults)
                     {
@@ -688,10 +667,6 @@ public class InvokeMgxRequest : MgxCmdletBase
 
     private readonly List<(string sourceId, JsonElement json)> _entityFanOutResults = [];
 
-    /// <summary>
-    /// Write fan-out: execute POST/PATCH/PUT/DELETE for each piped ID concurrently.
-    /// Same body is applied to all operations. URIs are resolved via {id} template.
-    /// </summary>
     private void ExecuteWriteFanOut(ConcurrentFanOut fanOut, List<string> uniqueIds, Dictionary<string, string>? headers, HttpMethod httpMethod)
     {
         if (!ShouldProcess($"{httpMethod.Method} {uniqueIds.Count} items via {Uri}", "Bulk write"))
@@ -867,12 +842,6 @@ public class InvokeMgxRequest : MgxCmdletBase
         return null;
     }
 
-    /// <summary>
-    /// Check if a GraphServiceException should be silently skipped based on
-    /// -SkipNotFound / -SkipForbidden switches. Used by single-request paths
-    /// (ExecuteGet, ExecuteWrite, ExecuteList) so that these switches work
-    /// consistently regardless of whether the pipeline has 1 or N items.
-    /// </summary>
     private bool ShouldSkipGraphError(GraphServiceException ex)
     {
         if (SkipNotFound.IsPresent && ex.StatusCode == HttpStatusCode.NotFound)
@@ -927,11 +896,6 @@ public class InvokeMgxRequest : MgxCmdletBase
     private Dictionary<string, string>? BuildHeaders() =>
         BuildRequestHeaders(ConsistencyLevel, Headers);
 
-    /// <summary>
-    /// Emit a Graph response payload. A collection envelope ({"value":[...]}, returned by GET and by
-    /// action endpoints such as /directoryObjects/getByIds) is unwrapped into one item per element;
-    /// anything else is emitted whole.
-    /// </summary>
     private void OutputPayload(JsonElement json, string? sourceId)
     {
         var items = TryUnwrapCollection(json, out var truncated);
@@ -990,11 +954,6 @@ public class InvokeMgxRequest : MgxCmdletBase
         WriteObject(ht);
     }
 
-    /// <summary>
-    /// Serialized request body for a write method, or null when no content should be sent.
-    /// Graph requires Content-Type: application/json on POST/PATCH/PUT even with an empty body,
-    /// so those default to "{}". DELETE sends no content.
-    /// </summary>
     private string? ResolveRequestBody(HttpMethod method)
     {
         var serialized = Body != null ? SerializeBody(Body) : null;
@@ -1062,10 +1021,6 @@ public class InvokeMgxRequest : MgxCmdletBase
         return value;
     }
 
-    /// <summary>
-    /// Flatten any non-string sequence (object[], ArrayList, List&lt;object&gt;, ...) into an array of
-    /// unwrapped values.
-    /// </summary>
     private static object?[] EnumerableToArray(IEnumerable source) =>
         source.Cast<object?>().Select(UnwrapValue).ToArray();
 

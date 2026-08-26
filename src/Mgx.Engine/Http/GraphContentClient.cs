@@ -5,9 +5,7 @@ using Polly.Retry;
 
 namespace Mgx.Engine.Http;
 
-/// <summary>
-/// Result of a content fetch. Owns the response: dispose it to release the connection.
-/// </summary>
+/// <summary>Result of a content fetch. Owns the response: dispose it to release the connection.</summary>
 public sealed class GraphContentResult : IDisposable
 {
     public required Stream Content { get; init; }
@@ -55,7 +53,6 @@ public static class GraphContentClient
 {
     private const int MaxManualRedirects = 3;
 
-    /// <summary>Statuses hop 1 treats as "go fetch from the download host".</summary>
     private static bool IsRedirect(HttpStatusCode status) =>
         status is HttpStatusCode.Moved or HttpStatusCode.Found
             or HttpStatusCode.SeeOther or HttpStatusCode.TemporaryRedirect
@@ -65,7 +62,7 @@ public static class GraphContentClient
     /// (redirects, 429/5xx, auth-expiry) can be mocked. Never set from production code.</summary>
     internal static HttpClient? DownloadClientForTests;
 
-    // Token-free singleton for hop 2. No auth handler by construction; decompression stays
+    // Token-free singleton for hop 2. No auth handler by construction. Decompression stays
     // off so ranged reads and Content-Length are byte-exact.
     private static readonly HttpClient s_downloadClient = new(new SocketsHttpHandler
     {
@@ -75,7 +72,7 @@ public static class GraphContentClient
         ConnectTimeout = TransportDefaults.ConnectTimeout
     })
     {
-        // Covers until response headers (ResponseHeadersRead); the body copy is bounded by
+        // Covers until response headers (ResponseHeadersRead). The body copy is bounded by
         // the caller's idle timeout, not this.
         Timeout = TimeSpan.FromSeconds(100)
     };
@@ -223,7 +220,7 @@ public static class GraphContentClient
     /// <summary>
     /// Fetch directly from a pre-authenticated download URL (a piped driveItem's
     /// @microsoft.graph.downloadUrl), skipping hop 1. The caller MUST have validated the URL
-    /// through DownloadUrlValidator first; this method validates again and throws otherwise.
+    /// through DownloadUrlValidator first. This method validates again and throws otherwise.
     /// No auth refresh is possible on this path - the URL is short-lived, and a 401/403 means
     /// the item must be re-fetched for a fresh one.
     /// </summary>
@@ -248,10 +245,6 @@ public static class GraphContentClient
         throw new Models.GraphServiceException(status, body);
     }
 
-    /// <summary>
-    /// Token-free fetch with manual, re-validated redirects. Every hop must pass the
-    /// allowlist: an open redirect on an allowlisted host is not a pass.
-    /// </summary>
     private static async Task<HttpResponseMessage> FetchFromDownloadHostAsync(
         string url, RangeHeaderValue? range, CancellationToken cancellationToken)
     {
@@ -304,7 +297,7 @@ public static class GraphContentClient
         HttpResponseMessage response, bool fromDownloadHost, TimeSpan bodyReadTimeout,
         CancellationToken cancellationToken)
     {
-        // ResponseHeadersRead: opening the stream is cheap; the caller copies with an idle
+        // ResponseHeadersRead: opening the stream is cheap. The caller copies with an idle
         // timeout (CopyWithIdleTimeoutAsync) so a stalled body cannot hang forever.
         using var bodyCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         bodyCts.CancelAfter(bodyReadTimeout);
@@ -409,11 +402,6 @@ public static class GraphContentClient
         return total;
     }
 
-    /// <summary>
-    /// One read, bounded by the idle timeout. A stalled body must not hang forever, and the
-    /// timeout applies per read rather than to the transfer as a whole so a slow-but-progressing
-    /// download is not killed.
-    /// </summary>
     private static async Task<int> ReadWithIdleTimeoutAsync(
         Stream source, byte[] buffer, int count, TimeSpan idleTimeout,
         CancellationToken cancellationToken)

@@ -6,7 +6,7 @@ namespace Mgx.Cmdlets.Cmdlets.Configuration;
 
 /// <summary>
 /// Set-MgxOption: Configure resilience options for all Mgx cmdlets.
-/// Only parameters explicitly passed are updated; unspecified values retain their current settings.
+/// Only parameters explicitly passed are updated. Unspecified values retain their current settings.
 /// Options take effect on the next cmdlet invocation.
 /// Use -Reset to restore all options to their defaults.
 /// </summary>
@@ -74,10 +74,6 @@ public class SetMgxOption : PSCmdlet
     [Parameter]
     public SwitchParameter Reset { get; set; }
 
-    /// <summary>
-    /// Parameters PowerShell adds to every cmdlet. Present in BoundParameters, but none of them
-    /// is a change to an option.
-    /// </summary>
     private static readonly HashSet<string> CommonParameterNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "Verbose", "Debug", "ErrorAction", "WarningAction", "InformationAction", "ProgressAction",
@@ -95,7 +91,6 @@ public class SetMgxOption : PSCmdlet
         if (!ShouldProcess(target, "Set"))
             return;
 
-        // -Reset: restore all defaults and return
         if (Reset.IsPresent)
         {
             MgxCmdletBase.SetClientOptions(ResilientGraphClientOptions.Default);
@@ -116,7 +111,6 @@ public class SetMgxOption : PSCmdlet
             return;
         }
 
-        // Start from current options, only override values the user actually passed
         var current = MgxCmdletBase.s_clientOptions;
 
         // If user explicitly set rate params but NOT NoRateLimit,

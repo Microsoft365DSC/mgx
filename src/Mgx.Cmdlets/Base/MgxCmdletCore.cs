@@ -27,9 +27,7 @@ public abstract class MgxCmdletCore : PSCmdlet, IDisposable
     private static readonly Regex Iso8601Pattern = new(
         @"^\d{4}-\d{2}-\d{2}[T ]", RegexOptions.Compiled);
 
-    /// <summary>
-    /// The cancellation token for this invocation.
-    /// </summary>
+    /// <summary>The cancellation token for this invocation.</summary>
     /// <remarks>
     /// A cached copy rather than <c>_cts.Token</c>. StopProcessing cancels and then disposes the
     /// source, and reading <c>Token</c> on a disposed source is documented to throw. Catch blocks
@@ -81,9 +79,7 @@ public abstract class MgxCmdletCore : PSCmdlet, IDisposable
 
     #region JSON conversion
 
-    /// <summary>
-    /// Convert a JsonElement to a case-insensitive Hashtable with all properties preserved.
-    /// </summary>
+    /// <summary>Convert a JsonElement to a case-insensitive Hashtable with all properties preserved.</summary>
     protected internal static Hashtable JsonToHashtable(JsonElement element)
     {
         // OrdinalIgnoreCase matches PowerShell's @{} literal, so member access stays

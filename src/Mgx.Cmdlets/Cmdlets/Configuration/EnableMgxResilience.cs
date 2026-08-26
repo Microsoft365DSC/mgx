@@ -27,7 +27,6 @@ public class EnableMgxResilience : PSCmdlet
     // Lock protecting all static state transitions. Used by both Enable and Disable.
     internal static readonly object StateLock = new();
 
-    // State for Disable-MgxResilience to restore
     internal static HttpClient? OriginalSdkClient { get; set; }
     internal static HttpClient? ResilientSdkClient { get; set; }
     internal static bool IsEnabled { get; set; }
@@ -67,7 +66,6 @@ public class EnableMgxResilience : PSCmdlet
             // Building Mgx's clean client first ensures it is cached before that happens.
             MgxCmdletBase.TryPreInitHttpClient(WriteWarning, WriteVerbose);
 
-            // Force SDK to initialize its HttpClient if not yet initialized
             if (currentClient == null)
             {
                 WriteVerbose("GraphHttpClient not initialized. Triggering initialization...");
@@ -83,7 +81,6 @@ public class EnableMgxResilience : PSCmdlet
                 return;
             }
 
-            // If already enabled, check if our client is still active
             if (IsEnabled)
             {
                 if (ReferenceEquals(currentClient, ResilientSdkClient))
@@ -96,7 +93,7 @@ public class EnableMgxResilience : PSCmdlet
                 WriteVerbose("MgxResilience was reset by SDK. Re-injecting resilience...");
                 // Not disposed: HttpClient.Dispose cancels its pending-request token source and
                 // the bridge handler forwards that token inward, so SDK requests already in
-                // flight die. Restoring GraphSession.GraphHttpClient stops new traffic; the old
+                // flight die. Restoring GraphSession.GraphHttpClient stops new traffic. The old
                 // client is collected once the requests still using it finish.
                 _ = ResilientSdkClient;
                 ResilientSdkClient = null;
@@ -108,13 +105,11 @@ public class EnableMgxResilience : PSCmdlet
                 "Replace with Polly resilience pipeline (retry, circuit breaker, rate limiting)"))
                 return;
 
-            // Save the current SDK client AFTER we know build will be attempted
             OriginalSdkClient = currentClient;
 
             var resilientClient = BuildResilientSdkClient(currentClient, WriteWarning);
             if (resilientClient == null)
             {
-                // Rollback: don't leave stale OriginalSdkClient on failure
                 OriginalSdkClient = null;
                 ThrowTerminatingError(new ErrorRecord(
                     new InvalidOperationException(
@@ -123,7 +118,6 @@ public class EnableMgxResilience : PSCmdlet
                 return;
             }
 
-            // Replace the SDK's HttpClient
             clientProp!.SetValue(instance, resilientClient);
             ResilientSdkClient = resilientClient;
             IsEnabled = true;
@@ -135,7 +129,6 @@ public class EnableMgxResilience : PSCmdlet
 
     private HttpClient? ForceInitializeAndGetClient(object instance, PropertyInfo? clientProp)
     {
-        // Use the Graph endpoint from the session (sovereign cloud support)
         var endpoint = MgxCmdletBase.GetGraphEndpoint(WriteWarning, WriteVerbose) ?? "https://graph.microsoft.com";
 
         // Save AzureADEndpoint before probe. Invoke-MgGraphRequest replaces
@@ -200,7 +193,7 @@ public class EnableMgxResilience : PSCmdlet
                 currentClient = null;
             }
 
-            // Not disposed - see the note above; in-flight SDK requests would be cancelled.
+            // Not disposed - see the note above. In-flight SDK requests would be cancelled.
             _ = ResilientSdkClient;
             ResilientSdkClient = null;
             ActiveHandler = null;
@@ -262,13 +255,11 @@ public class EnableMgxResilience : PSCmdlet
                 "the Graph SDK's retry option could not be configured, so its own retry handler "
                 + "stays active inside the wrap");
 
-        // MaxRetry is the only lever that removes a retry. The option also exposes ShouldRetry,
-        // which looks like a way to decline 429 alone and leave the handler's 503 and 504
-        // retries intact - it is not: the handler ORs it with its own status check, so
-        // ShouldRetry can only add retries, never suppress one. Measured against 1.21.1.
-        //
-        // The cost is that the handler's 503/504 retries go too, including on writes, and Mgx's
-        // pipeline will not take those over: it refuses to retry a non-idempotent request on a
+        // MaxRetry is the only lever that removes a retry. ShouldRetry cannot suppress one,
+        // because the handler ORs it with its own status check.
+        // The cost is that the handler 503 and 504 retries go too, including on writes, which
+        // the Mgx pipeline will not take over since it refuses to retry a non-idempotent
+        // request on a
         // 5xx because the write may already have been applied. 429 is unaffected - the pipeline
         // retries that for every method - so throttled writes still complete.
         maxRetry.SetValue(option, 0);
@@ -312,10 +303,6 @@ public class EnableMgxResilience : PSCmdlet
         }
     }
 
-    /// <summary>
-    /// Bridges from a DelegatingHandler chain to an existing HttpClient, preserving
-    /// the SDK's full handler pipeline (OData, NationalCloud, Redirect, Auth, etc.).
-    /// </summary>
     private sealed class SdkClientBridgeHandler : HttpMessageHandler
     {
         private readonly HttpClient _sdkClient;

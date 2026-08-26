@@ -84,9 +84,7 @@ public sealed class DeltaState
         }
     }
 
-    /// <summary>
-    /// Backward-compatible Load. Returns null for both "not found" and "corrupt".
-    /// </summary>
+    /// <summary>Backward-compatible Load. Returns null for both "not found" and "corrupt".</summary>
     public static DeltaState? Load(string path) => LoadWithResult(path).State;
 
     /// <summary>
@@ -109,7 +107,7 @@ public sealed class DeltaState
             }
             catch
             {
-                // The staging file is not the state; leaving it behind only invites a later run
+                // The staging file is not the state. Leaving it behind only invites a later run
                 // to wonder what it is.
                 try { if (File.Exists(tmpPath)) File.Delete(tmpPath); } catch { }
                 throw;
@@ -121,9 +119,7 @@ public sealed class DeltaState
     /// Delete delta state file and temp file. Acquires per-path lock to avoid
     /// racing with concurrent Save operations.
     /// </summary>
-    /// <summary>
-    /// Returns true if the file was deleted (or didn't exist), false if deletion failed.
-    /// </summary>
+    /// <summary>Returns true if the file was deleted (or didn't exist), false if deletion failed.</summary>
     public static bool Delete(string path)
     {
         var normalizedPath = Path.GetFullPath(path);

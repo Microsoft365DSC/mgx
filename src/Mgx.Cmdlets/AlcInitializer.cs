@@ -54,7 +54,7 @@ public class AlcInitializer : IModuleAssemblyInitializer, IModuleAssemblyCleanup
         }
         catch (Exception ex)
         {
-            // Resolver must never throw; return null to let the runtime continue
+            // Resolver must never throw. Return null to let the runtime continue
             // its normal resolution process.
             System.Diagnostics.Debug.WriteLine($"[Mgx ALC] Failed to resolve '{name.Name}': {ex.Message}");
             return null;
@@ -81,8 +81,7 @@ public class AlcInitializer : IModuleAssemblyInitializer, IModuleAssemblyCleanup
         }
         catch (Exception ex)
         {
-            // Never let teardown throw: a failure here would block module removal,
-            // which is the exact defect this ordering fixes.
+            // Never let teardown throw, or module removal is blocked
             System.Diagnostics.Debug.WriteLine($"[Mgx ALC] Cleanup on remove failed: {ex.Message}");
         }
 

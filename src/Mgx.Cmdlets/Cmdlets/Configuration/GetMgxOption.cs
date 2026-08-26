@@ -4,9 +4,7 @@ using Mgx.Cmdlets.Models;
 
 namespace Mgx.Cmdlets.Cmdlets.Configuration;
 
-/// <summary>
-/// Get-MgxOption: Display current resilience and rate limiting configuration.
-/// </summary>
+/// <summary>Get-MgxOption: Display current resilience and rate limiting configuration.</summary>
 [Cmdlet(VerbsCommon.Get, "MgxOption")]
 [OutputType(typeof(MgxOptionOutput))]
 public class GetMgxOption : PSCmdlet

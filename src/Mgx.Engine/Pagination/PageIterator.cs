@@ -10,28 +10,18 @@ namespace Mgx.Engine.Pagination;
 /// </summary>
 public sealed record ResumeState(string NextLink, int SkipOnFirstPage, long ItemsAlreadyCollected);
 
-/// <summary>
-/// Information about a completed page, passed to the consumer via callback.
-/// </summary>
+/// <summary>Information about a completed page, passed to the consumer via callback.</summary>
 public sealed record PageCompletedInfo(string? NextPageUrl);
 
 /// <summary>
 /// Streaming page iterator that follows @odata.nextLink and yields items
 /// via IAsyncEnumerable for immediate pipeline output. Does not perform
-/// checkpoint I/O; the consumer owns checkpoint lifecycle.
+/// checkpoint I/O. The consumer owns checkpoint lifecycle.
 /// </summary>
 public sealed class PageIterator
 {
     private readonly ResilientGraphClient _client;
 
-    /// <summary>
-    /// Maximum consecutive empty pages before breaking to prevent infinite loops.
-    /// Graph API should never return empty pages with nextLink on regular endpoints.
-    /// Delta endpoints CAN return many empty pages with nextLink between the data
-    /// and the final deltaLink page (observed: 15+ empty pages on /users/delta).
-    /// When onDeltaLink is provided, the limit is raised to 1000 to allow delta
-    /// pagination to reach the final page while still guarding against Graph bugs.
-    /// </summary>
     private const int MaxConsecutiveEmptyPages = 3;
     private const int MaxConsecutiveEmptyPagesDelta = 1000;
 

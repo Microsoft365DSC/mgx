@@ -32,7 +32,7 @@ public sealed class ResilientGraphClientOptions
     /// Maximum Retry-After delay in seconds. Caps server-requested delays to prevent
     /// a single throttled request from consuming the entire timeout budget. Applied in both
     /// the resilience pipeline DelayGenerator and batch client retry logic.
-    /// Graph API commonly returns Retry-After: 150s during sustained throttling; honoring
+    /// Graph API commonly returns Retry-After: 150s during sustained throttling. Honoring
     /// this (rather than clamping aggressively) reduces wasted retry attempts.
     /// Range: 1-600. Default: 120.
     /// </summary>
@@ -148,7 +148,7 @@ public sealed class ResilientGraphClientOptions
     /// Number of batch chunks to execute concurrently. Range: 1-10. Default: 1 (sequential).
     /// At 1, batch chunks execute sequentially with cross-chunk backpressure delays (safest for throttled workloads).
     /// At 2+, chunks execute in parallel via SemaphoreSlim, improving throughput for non-throttled workloads.
-    /// Higher values consume throttle budget faster; use with caution on large tenants.
+    /// Higher values consume throttle budget faster. Use with caution on large tenants.
     /// </summary>
     public int BatchChunkConcurrency
     {

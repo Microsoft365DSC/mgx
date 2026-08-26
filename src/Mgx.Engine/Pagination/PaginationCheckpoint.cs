@@ -6,7 +6,7 @@ namespace Mgx.Engine.Pagination;
 
 /// <summary>
 /// Checkpoint state for resumable pagination.
-/// Saved as JSON after each page; auto-deleted on successful completion.
+/// Saved as JSON after each page. Auto-deleted on successful completion.
 /// Uses atomic write (write to .tmp, then rename) to prevent corruption.
 /// </summary>
 public sealed class PaginationCheckpoint
@@ -56,9 +56,7 @@ public sealed class PaginationCheckpoint
     // Per-path lock prevents concurrent runspaces from corrupting the same checkpoint (RD-H7)
     private static readonly ConcurrentDictionary<string, object> s_pathLocks = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// Load a checkpoint from disk. Returns null if the file doesn't exist or is corrupt.
-    /// </summary>
+    /// <summary>Load a checkpoint from disk. Returns null if the file doesn't exist or is corrupt.</summary>
     public static PaginationCheckpoint? Load(string path)
     {
         if (!File.Exists(path)) return null;
@@ -70,12 +68,12 @@ public sealed class PaginationCheckpoint
         catch (JsonException)
         {
             // Corrupt checkpoint file (e.g., partial write from crash).
-            // Treat as no checkpoint; caller will start fresh.
+            // Treat as no checkpoint. Caller will start fresh.
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Locked, or the account cannot read it; treat as no checkpoint either way. Windows
+            // Locked, or the account cannot read it. Treat as no checkpoint either way. Windows
             // reports a denying ACL as UnauthorizedAccessException, which is not an IOException,
             // so catching only the latter made an unreadable checkpoint throw on Windows and
             // resume cleanly everywhere else.
@@ -112,9 +110,7 @@ public sealed class PaginationCheckpoint
         }
     }
 
-    /// <summary>
-    /// Returns true if deleted (or didn't exist), false if deletion failed.
-    /// </summary>
+    /// <summary>Returns true if deleted (or didn't exist), false if deletion failed.</summary>
     public static bool Delete(string path)
     {
         try

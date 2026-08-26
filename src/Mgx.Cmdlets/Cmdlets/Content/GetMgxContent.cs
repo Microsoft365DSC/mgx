@@ -30,17 +30,14 @@ public class GetMgxContent : MgxCmdletBase
     [Parameter(Mandatory = true, ValueFromPipeline = true, ParameterSetName = "InputObject")]
     public object? InputObject { get; set; }
 
-    /// <summary>First N bytes (Range: bytes=0..N-1). Mutually exclusive with -Offset/-Length.</summary>
     [Parameter]
     [ValidateRange(1, long.MaxValue)]
     public long First { get; set; }
 
-    /// <summary>Range start, used with -Length (Range: bytes=Offset..Offset+Length-1).</summary>
     [Parameter]
     [ValidateRange(0, long.MaxValue)]
     public long Offset { get; set; }
 
-    /// <summary>Range length, from -Offset (default 0).</summary>
     [Parameter]
     [ValidateRange(1, long.MaxValue)]
     public long Length { get; set; }
@@ -137,7 +134,6 @@ public class GetMgxContent : MgxCmdletBase
             return;
         }
 
-        // Fall back to the item identifiers
         var id = Cmdlets.InvokeMgxRequest.ResolvePipelineId(value);
         var driveId = TryGetMember(TryGetMember(value, "parentReference"), "driveId")?.ToString();
         if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(driveId))
@@ -163,7 +159,6 @@ public class GetMgxContent : MgxCmdletBase
         return null;
     }
 
-    /// <summary>Bytes the caller asked for, or null for the whole file.</summary>
     private long? RequestedBytes => First > 0 ? First : Length > 0 ? Length : null;
 
     private void FetchContent(string? downloadUrl, string? relativeUri, object? errorTarget)

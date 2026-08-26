@@ -11,7 +11,7 @@ namespace Mgx.Cmdlets.Cmdlets.Export;
 
 /// <summary>
 /// Export-MgxCollection: Stream paginated Graph API results directly to a JSONL file.
-/// One JSON object per line; no PSObject conversion, minimal memory pressure.
+/// One JSON object per line. No PSObject conversion, minimal memory pressure.
 /// Supports checkpoint/resume for interrupted exports.
 /// Consumer owns checkpoint lifecycle: saves at page boundaries and mid-page flushes
 /// to prevent duplicate items on crash resume (H6 dedup fix).
@@ -370,11 +370,9 @@ public class ExportMgxCollection : MgxCmdletBase
                 {
                     if (!append)
                     {
-                        // User cancellation of a checkpointed fresh run: promote the temp
-                        // file (the using block already flushed it on unwind) and save a
-                        // checkpoint matching its exact content, so the printed resume
-                        // hint is true for first runs too. Previously the temp was
-                        // deleted here and the next run declared the checkpoint stale.
+                        // Cancelling a checkpointed fresh run promotes the temp, already flushed
+                        // on unwind, and saves a checkpoint matching its content, so the printed
+                        // resume hint holds for first runs too
                         var cancelled = attemptEx is OperationCanceledException
                             && CancellationToken.IsCancellationRequested;
                         var promoted = false;
@@ -402,7 +400,7 @@ public class ExportMgxCollection : MgxCmdletBase
                             }
                             catch (Exception promoteEx) when (promoteEx is IOException or UnauthorizedAccessException)
                             {
-                                // Promotion is best-effort; fall back to the old cleanup.
+                                // Promotion is best-effort. Fall back to the old cleanup.
                             }
                         }
                         if (!promoted)
@@ -414,7 +412,7 @@ public class ExportMgxCollection : MgxCmdletBase
                             // naming a missing file and start the export over - resume worked
                             // after a kill or a Ctrl-C but never after a handled error, which
                             // is the common way a long export dies. Keep the temp for the next
-                            // run to promote; it is deleted by promotion or by the stale-temp
+                            // run to promote. It is deleted by promotion or by the stale-temp
                             // sweep once the checkpoint is gone.
                             var resumable = cpPath != null && File.Exists(cpPath);
                             if (!resumable)
@@ -474,7 +472,7 @@ public class ExportMgxCollection : MgxCmdletBase
             }
             catch (GraphServiceException ex) when (includeAutoCount && countAutoAdded && ex.StatusCode == HttpStatusCode.BadRequest)
             {
-                // Auto-added $count=true rejected by this endpoint; retry without it
+                // Auto-added $count=true rejected by this endpoint. Retry without it
                 DrainClientMessages();
                 WriteVerbose("Endpoint rejected $count=true (HTTP 400). Retrying without count parameter.");
                 includeAutoCount = false;
@@ -522,31 +520,12 @@ public class ExportMgxCollection : MgxCmdletBase
     private Dictionary<string, string>? BuildHeaders() =>
         BuildRequestHeaders(ConsistencyLevel, Headers);
 
-    /// <summary>
-    /// Put the files into the state the checkpoint claims, or delete the checkpoint. A checkpoint
-    /// records which file its items were written to and how many bytes they occupy, which makes
-    /// three cases decidable rather than guessed.
-    ///
-    /// A temp is named, so the interrupted run was fresh and its items are in that temp while the
-    /// output still holds a previous export. Recovery promotes the temp, the same way a
-    /// completing run does. Appending would leave the previous export rows in front.
-    ///
-    /// No temp is named, so the run was appending to the output and its items are already there.
-    /// Cutting back to the recorded length stops anything written after the last save from being
-    /// written twice.
-    ///
-    /// Neither is recorded, so the checkpoint predates this and is handled as it was before.
-    ///
-    /// When the counted items are in no file, nothing has been promoted and no token has moved,
-    /// so starting over costs a pass and loses nothing.
-    /// </summary>
     private void ReconcileCheckpointWithFiles(string checkpointPath, string outputPath, PaginationCheckpoint checkpoint)
     {
         if (checkpoint.DataLength is not { } dataLength)
         {
-            // Written before any of this was recorded. Adoption then has only a line count and
-            // the newest matching temp to go on, which is safe to attempt only when there is no
-            // output it could be merged into - exactly the case this path used to be limited to.
+            // An older checkpoint records neither field, so adoption has only a line count and
+            // the newest matching temp, which is safe only when there is no output to merge into
             if (!File.Exists(outputPath))
             {
                 if (TryAdoptOrphanedTemp(outputPath, checkpoint.ItemsCollected))

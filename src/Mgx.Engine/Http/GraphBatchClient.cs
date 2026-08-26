@@ -9,7 +9,7 @@ namespace Mgx.Engine.Http;
 /// <summary>
 /// Sends batched requests to Graph /$batch endpoint (up to 20 per call).
 /// Uses a two-layer retry design: Polly (via ResilientGraphClient) handles
-/// transport-level retries on the outer $batch POST; this class handles
+/// transport-level retries on the outer $batch POST. This class handles
 /// per-item retries within the 200-OK batch response body (429, 5xx for
 /// idempotent methods). Graph always returns HTTP 200 for $batch, so Polly
 /// never sees per-item errors.
@@ -54,20 +54,17 @@ public sealed class GraphBatchClient
     private readonly int _batchChunkConcurrency;
     private readonly int _batchItemsPerSecond;
 
-    // Cross-call pacing state: tracks when the last batch completed and how many items
-    // it processed so that successive small-batch calls (e.g., 20 items = 1 chunk) still
-    // get paced. Without this, pacing only fires between chunks within a single call.
+    // When the last batch completed and how many items it carried, so successive small-batch
+    // calls are paced and not only the chunks inside one call
     private static long s_lastBatchCompletedTicks;
     private static int s_lastBatchItemCount;
 
-    // Cross-call adaptive rate: when 429s trigger rate halving, persist the adapted rate
-    // across Invoke-MgxBatchRequest calls so subsequent calls start at the reduced rate
-    // instead of resetting to the configured BatchItemsPerSecond.
+    // The adapted rate persists across calls, so a later call starts reduced rather than back
+    // at the configured BatchItemsPerSecond
     private static int s_adaptedItemsPerSecond;
 
-    // When the last 429 was seen, so the adapted rate can expire. Without an expiry a single
-    // throttling episode kept every later batch in the process at the reduced rate for the
-    // lifetime of the session, with no way to recover short of restarting PowerShell.
+    // When the last 429 was seen, so the adapted rate can expire rather than holding every
+    // later batch down for the life of the session
     private static long s_lastThrottleTicks;
 
     // Chunk-loop AIMD tuning. The shared math (halve on throttle, additive recovery, expiry
@@ -110,7 +107,7 @@ public sealed class GraphBatchClient
         var operations = urls.Select(u => new BatchOperation(u)).ToList();
         var result = await ExecuteBatchIndexedAsync(operations, cancellationToken);
 
-        // Convert to URL-keyed dictionary (backward compatible)
+        // URL-keyed for the legacy overload
         var results = new Dictionary<string, GraphBatchResponseItem>(result.Results.Count);
         foreach (var (op, response) in result.Results)
             results[op.Url] = response;
@@ -145,10 +142,9 @@ public sealed class GraphBatchClient
         Exception? chunkFailure = null;
         var notSent = new List<BatchOperation>();
 
-        // Cross-call pacing: if a previous write batch completed recently, delay to maintain
-        // target throughput. Only applies to batches containing writes (POST/PATCH/DELETE) -
-        // GET-only batches don't hit Graph's write throttle. Delay is capped to one chunk's
-        // worth (MaxBatchSize items) to smooth the gap between calls, not re-pace the whole
+        // A recent write batch delays this one to hold target throughput. Writes only, since a
+        // GET batch does not hit the write throttle. Capped to one chunk worth, to smooth the
+        // gap between calls rather than re-pace the whole
         // previous batch.
         var hasWrites = HasWriteOperations(operations);
         if (_batchItemsPerSecond > 0 && hasWrites)
@@ -169,20 +165,17 @@ public sealed class GraphBatchClient
             }
         }
 
-        // Process in chunks of MaxBatchSize
         var chunks = operations.Chunk(MaxBatchSize).ToArray();
 
         if (_batchChunkConcurrency <= 1)
         {
-            // Sequential mode (default): cross-chunk backpressure delays between chunks
+            // Sequential mode applies backpressure between chunks
             int globalOffset = 0;
             int crossChunkDelaySeconds = 0;
             long prevChunkElapsedMs = 0;
             int chunkIndex = 0;
-            // Adaptive pacing: starts at the persisted adapted rate (if any), otherwise
-            // the configured rate. Halves on each 429 encounter. Persisted across calls
-            // so that successive Invoke-MgxBatchRequest invocations in a loop don't reset
-            // to the full rate and immediately get re-throttled.
+            // Starts at the persisted adapted rate, or the configured one, and halves on each
+            // 429. Persisted so a loop of calls does not reset to full rate and re-throttle
             var adapted = Volatile.Read(ref s_adaptedItemsPerSecond);
             if (adapted > 0 && AdaptivePacing.AdaptedRateHasExpired(
                     Interlocked.Read(ref s_lastThrottleTicks), Stopwatch.GetTimestamp()))
@@ -212,7 +205,7 @@ public sealed class GraphBatchClient
                 }
                 else if (globalOffset > 0 && effectiveItemsPerSecond > 0 && hasWrites)
                 {
-                    // Inter-chunk pacing: smooth write throughput to avoid burst-and-stall.
+                    // Smooths write throughput to avoid burst and stall
                     var targetMs = (int)(chunk.Length / (double)effectiveItemsPerSecond * 1000);
                     var pacingMs = targetMs - (int)prevChunkElapsedMs;
                     if (pacingMs > 0)
@@ -234,9 +227,8 @@ public sealed class GraphBatchClient
                     (chunkResults, throttleDelay, chunkRetries, chunkThrottles, chunkRetryDelayMs) =
                         await SendBatchWithRetryAsync(chunk, cancellationToken);
                 }
-                // Only an HTTP-level failure of the chunk itself. A malformed envelope - wrong
-                // response count, unknown ids - is a protocol violation rather than a chunk that
-                // did not land, and it still throws: nothing about the run can be trusted after it.
+                // Only an HTTP-level failure of the chunk itself. A malformed envelope is a
+                // protocol violation rather than a chunk that did not land, and still throws
                 catch (GraphServiceException ex)
                 {
                     // The chunks before this one were applied on the server. Letting this
@@ -306,7 +298,7 @@ public sealed class GraphBatchClient
         else
         {
             // Parallel mode: SemaphoreSlim-bounded concurrent chunk execution
-            // No cross-chunk backpressure; chunks run independently
+            // No cross-chunk backpressure. Chunks run independently
             var chunkOffsets = new int[chunks.Length];
             int runningOffset = 0;
             for (int j = 0; j < chunks.Length; j++)
@@ -445,13 +437,6 @@ public sealed class GraphBatchClient
         };
     }
 
-    /// <summary>
-    /// Returns (Results, ThrottleDelaySeconds, ItemRetries, ThrottleEncounters, RetryDelayMs).
-    /// ThrottleDelaySeconds: highest Retry-After seen, for cross-chunk backpressure.
-    /// ItemRetries: total individual item retries in this chunk.
-    /// ThrottleEncounters: number of 429 responses seen across all attempts.
-    /// RetryDelayMs: total milliseconds spent in retry delays within this chunk.
-    /// </summary>
     private async Task<(IReadOnlyList<(BatchOperation Operation, GraphBatchResponseItem Response)> Results, int ThrottleDelaySeconds, int ItemRetries, int ThrottleEncounters, long RetryDelayMs)> SendBatchWithRetryAsync(
         BatchOperation[] operations,
         CancellationToken cancellationToken)
@@ -654,11 +639,6 @@ public sealed class GraphBatchClient
             VerboseWriter(msg);
     }
 
-    /// <summary>
-    /// Determines if a batch response item should be retried.
-    /// POST is non-idempotent: only retry on 429 (matches Kiota SDK behavior), not on 5xx/408 (could create duplicates).
-    /// Other methods (GET, PATCH, PUT, DELETE) retry on 429/408/500/502/503/504 (aligned with ResiliencePipelineFactory).
-    /// </summary>
     private static bool IsRetryable(int statusCode, string method)
     {
         if (statusCode == 429) return true;

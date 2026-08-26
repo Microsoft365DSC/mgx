@@ -26,7 +26,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     private static HttpClient? s_graphHttpClient;
     private static bool s_ownsHttpClient; // false when using SDK fallback (don't dispose SDK's client)
 
-    // Identity the cached client was built for
     private static volatile string? s_cachedAuthFingerprint;
 
     // WeakReference so a disconnected AuthContext, and the certificate it holds, is not kept
@@ -181,10 +180,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         return _client = ConfigureClient(httpClient, clientOptions);
     }
 
-    /// <summary>
-    /// Wraps an HttpClient in a ResilientGraphClient wired to this cmdlet's output streams.
-    /// Shared by the production and test transport paths so both are wired identically.
-    /// </summary>
     private ResilientGraphClient ConfigureClient(HttpClient httpClient, ResilientGraphClientOptions options)
     {
         var client = new ResilientGraphClient(httpClient, options)
@@ -224,7 +219,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
             verbose?.Invoke($"Failed to read GraphSession.AuthContext: {ex.Message}");
         }
 
-        // Fallback for SDK internals drift using Get-MgContext
         try
         {
             using var ps = PowerShell.Create(RunspaceMode.CurrentRunspace);
@@ -243,11 +237,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         }
     }
 
-    /// <summary>
-    /// True when the live AuthContext is a different object than the one the cached client was
-    /// built from. Connect-MgGraph replaces the object, so this catches identity changes the
-    /// value fingerprint cannot see (a rotated ClientSecret above all).
-    /// </summary>
     private static bool AuthContextInstanceChanged(object? current)
     {
         var cachedRef = s_cachedAuthContextRef;
@@ -262,9 +251,7 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         "CertificateThumbprint", "CertificateSubjectName", "SendCertificateChain", "WamEnabled"
     ];
 
-    /// <summary>
-    /// Builds a comparable fingerprint of the effective Graph identity.
-    /// </summary>
+    /// <summary>Builds a comparable fingerprint of the effective Graph identity.</summary>
     internal static string BuildAuthFingerprint(object? authContext, string? graphEndpoint)
     {
         if (authContext == null) return string.Empty;
@@ -292,9 +279,7 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     private static void AppendField(StringBuilder sb, string value) =>
         sb.Append(FieldSeparator).Append(value.Length).Append(':').Append(value);
 
-    /// <summary>
-    /// Reads a named member off an AuthContext-shaped object.
-    /// </summary>
+    /// <summary>Reads a named member off an AuthContext-shaped object.</summary>
     internal static object? ReadAuthMember(object? source, string name)
     {
         if (source == null) return null;
@@ -389,10 +374,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         }
     }
 
-    /// <summary>
-    /// Builds an auth-only HttpClient from the Graph SDK MSAL AuthenticationHandler, which
-    /// refreshes tokens five minutes before expiry, so long operations stay authenticated.
-    /// </summary>
     private HttpClient? BuildCleanHttpClient(int totalTimeoutSeconds) =>
         BuildCleanHttpClient(WriteWarning, WriteVerbose, totalTimeoutSeconds);
 
@@ -523,7 +504,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         {
             if (s_graphHttpClient != null && !ClientIsStale(identity, options)) return;
 
-            // Build first, so a failed build leaves the existing client valid
             var client = BuildCleanHttpClient(warn, verbose, options.TotalTimeoutSeconds);
             if (client == null) return; // BuildCleanHttpClient already warned with ex.Message
 
@@ -540,10 +520,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         }
     }
 
-    /// <summary>
-    /// True when the cached client no longer matches the given identity (by either signal) or
-    /// the timeout it was built with. Callers must hold s_initLock, or accept a benign rebuild.
-    /// </summary>
     private static bool ClientIsStale(AuthIdentity identity, ResilientGraphClientOptions options) =>
         !string.Equals(s_cachedAuthFingerprint, identity.Fingerprint, StringComparison.Ordinal)
         || AuthContextInstanceChanged(identity.AuthContext)
@@ -560,7 +536,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
                 ?.GetValue(instance) as HttpClient;
             if (httpClient != null) return httpClient;
 
-            // The detected endpoint, so sovereign clouds work
             var endpoint = GetGraphEndpoint(WriteWarning, WriteVerbose) ?? "https://graph.microsoft.com";
 
             // Same AzureADEndpoint save and restore as ForceInitializeAndGetClient
@@ -663,12 +638,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         }
     }
 
-    /// <summary>
-    /// Disposes an HttpClient after a delay. In-flight ResilientGraphClient instances
-    /// may still hold a reference to the old client, so we wait for the total timeout
-    /// window to ensure all in-flight requests complete before disposing.
-    /// Same pattern as ResiliencePipelineFactory.ScheduleDelayedDispose for rate limiters.
-    /// </summary>
     private static void ScheduleDelayedHttpClientDispose(HttpClient? client, bool owned)
     {
         // Ownership is passed in, not read off the static, because callers replace that static
@@ -724,11 +693,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         s_clientOptions = options ?? ResilientGraphClientOptions.Default;
     }
 
-    /// <summary>
-    /// True when nothing else holds the file. FileShare.None is honored between .NET processes
-    /// on both Windows and Unix, so a writer that has it open makes this fail rather than let a
-    /// sweep take a file out from under it.
-    /// </summary>
     private static bool CanTakeExclusively(string path)
     {
         try
@@ -780,11 +744,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         }
     }
 
-    /// <summary>
-    /// The temp a checkpoint names, or null when it cannot be used. A checkpoint on disk is
-    /// untrusted input, so the recorded name must be one a run could have written and must not
-    /// be the output itself. The file must also be at least as long as the checkpoint promised.
-    /// </summary>
     private static string? ResolveNamedTemp(string outputPath, string tempFileName, long dataLength)
     {
         if (dataLength <= 0) return null;
@@ -802,10 +761,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         return tempPath;
     }
 
-    /// <summary>
-    /// True when <paramref name="candidate"/> is a name a fresh run gives its temp:
-    /// the output's own name, a dot, 32 lowercase hex digits (Guid "N"), and ".tmp".
-    /// </summary>
     private static bool IsRunTempName(string outputFileName, string candidate)
     {
         var prefix = outputFileName + ".";
@@ -1046,12 +1001,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         $"Wait {s_clientOptions.CircuitBreakerDurationSeconds}s or run Get-MgxTelemetry for details. " +
         $"Tune with Set-MgxOption -CircuitBreakerFailureRatio / -CircuitBreakerMinThroughput.";
 
-    /// <summary>
-    /// Codes meaning the path was fine and the object was absent, so a beta hint would send the
-    /// caller to re-run a request that fails there too. Only codes with unambiguous semantics
-    /// belong here. Request_ResourceNotFound does not qualify, since Graph returns it both for a
-    /// missing directory object and for a beta-only segment on v1.0, so the hedged hint stays.
-    /// </summary>
     private static readonly HashSet<string> ObjectMissingCodes = new(StringComparer.OrdinalIgnoreCase)
     {
         "itemNotFound",
@@ -1093,7 +1042,7 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     /// BrokenCircuitException, HttpRequestException) that appear in every cmdlet's
     /// catch cascade. Drains buffered messages, writes beta hint if applicable,
     /// and writes the error record.
-    /// Returns true if the exception was handled; false if unrecognized.
+    /// Returns true if the exception was handled. False if unrecognized.
     /// </summary>
     protected bool WriteGraphError(Exception ex, object? target, string? apiVersion = null)
     {

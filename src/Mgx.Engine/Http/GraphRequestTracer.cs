@@ -12,10 +12,6 @@ internal static partial class GraphRequestTracer
     /// <summary>Bodies longer than this are cut, with the omitted length noted.</summary>
     internal const int MaxBodyChars = 4096;
 
-    /// <summary>
-    /// Response headers worth tracing. Everything else (caching, CORS, transport) is noise.
-    /// Prefix entries match any header starting with the value.
-    /// </summary>
     private static readonly string[] ResponseHeaderNames =
     [
         "request-id", "client-request-id", "x-ms-ags-diagnostic", "Retry-After",
@@ -45,9 +41,7 @@ internal static partial class GraphRequestTracer
         RegexOptions.IgnoreCase)]
     private static partial Regex DownloadUrlProperty();
 
-    /// <summary>
-    /// Trace line for an outgoing request. <paramref name="attempt"/> is 1-based so retries are visible.
-    /// </summary>
+    /// <summary>Trace line for an outgoing request. <paramref name="attempt"/> is 1-based so retries are visible.</summary>
     internal static string FormatRequest(HttpRequestMessage request, byte[]? body, int attempt)
     {
         var sb = new StringBuilder();
@@ -76,9 +70,7 @@ internal static partial class GraphRequestTracer
         return sb.ToString();
     }
 
-    /// <summary>
-    /// Trace line for a response. <paramref name="body"/> is null when the body was not buffered.
-    /// </summary>
+    /// <summary>Trace line for a response. <paramref name="body"/> is null when the body was not buffered.</summary>
     internal static string FormatResponse(HttpResponseMessage response, long elapsedMs, string? body)
     {
         var sb = new StringBuilder();
@@ -113,11 +105,6 @@ internal static partial class GraphRequestTracer
 
     private static string Join(IEnumerable<string> values) => string.Join(", ", values);
 
-    /// <summary>
-    /// A content 302 Location grants the file bytes without a bearer token, so tracing it
-    /// verbatim writes a live credential. Keep only scheme and host, which is the diagnostic
-    /// value of the header. The JSON body redaction cannot reach header values.
-    /// </summary>
     private static string RedactHeaderValue(string name, string value)
     {
         if (!name.Equals("Location", StringComparison.OrdinalIgnoreCase)) return value;
@@ -126,7 +113,6 @@ internal static partial class GraphRequestTracer
             : "<redacted>";
     }
 
-    /// <summary>Redact credential-looking JSON properties and pre-authenticated URLs, then truncate.</summary>
     private static string Sanitize(string body)
     {
         var redacted = SensitiveJsonValue().Replace(body, "\"$1\": \"<redacted>\"");

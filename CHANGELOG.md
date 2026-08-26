@@ -34,6 +34,8 @@ Merges upstream `gromedev/mgx` 2.1.1. The module name, version line, target fram
 
 ### Testing and CI
 
+- The merged suite was de-duplicated: 119 tests were removed as filler or as duplicates of the same production behavior already covered on the other side, and the `Live`-tagged Pester blocks were dropped because this fork does not ship `tests/Live`. The xUnit suite runs serialized, since the cmdlet-hosting tests inject into process-wide static state.
+- Fixed the atomic checkpoint and delta-state save failing under a transient Windows sharing violation, which upstream's own concurrency test caught.
 - Code coverage is now collected on every PR build and published to the GitHub Actions run summary, alongside a combined table of the xUnit, E2E and Pester results.
 - Added engine tests for `GraphBatchClient`, `PageIterator` and `ConcurrentFanOut`, which previously had no direct coverage: `$batch` chunking at 20 items, per-item 429 retry, the response-count guard, pagination and its SSRF rejection path, and bulk-write partial failure.
 - Added `tests/Mgx.E2ETests`, which runs the cmdlets in a real runspace against a WireMock container serving canned Graph responses over HTTPS. HTTPS is required rather than incidental because `NextLinkValidator` rejects any non-https `@odata.nextLink`. A plain-HTTP mock would end pagination after one page while still reporting success.

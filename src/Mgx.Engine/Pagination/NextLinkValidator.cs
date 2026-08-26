@@ -58,7 +58,6 @@ public static class NextLinkValidator
         return validated;
     }
 
-    /// <summary>Scheme, authority and path only - the query can carry anything on a crafted link.</summary>
     private static string Describe(string link) =>
         Uri.TryCreate(link, UriKind.Absolute, out var u)
             ? $"{u.Scheme}://{u.Authority}{u.AbsolutePath}"

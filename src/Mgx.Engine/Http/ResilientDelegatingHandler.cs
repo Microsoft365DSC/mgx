@@ -31,16 +31,15 @@ public sealed class ResilientDelegatingHandler : DelegatingHandler
     /// from a throttle and telemetry books a throttled session as zero. Kiota reads its retry
     /// option per request, so setting it here is what reaches it.
     ///
-    /// Keyed by string and typed as object so the engine needs no reference to the SDK; the
+    /// Keyed by string and typed as object so the engine needs no reference to the SDK. The
     /// caller supplies whatever the inner handler expects.
     /// </summary>
     public IReadOnlyDictionary<string, object?>? AdditionalRequestOptions { get; init; }
 
     /// <summary>
-    /// Resolved on the first request rather than when the handler is built. The type it needs
+    /// Resolved on the first request, not when the handler is built, because the type it needs
     /// belongs to the SDK and is not loaded until the SDK has sent something through its own
-    /// chain, so building the options eagerly found nothing and silently left the inner handler
-    /// armed. Called once; the result, including null, is kept.
+    /// chain. Called once, and the result is kept even when null.
     /// </summary>
     public Func<IReadOnlyDictionary<string, object?>?>? AdditionalRequestOptionsFactory { get; init; }
 

@@ -24,10 +24,6 @@ namespace Mgx.Cmdlets.Cmdlets.Expand;
 [OutputType(typeof(Hashtable))]
 public class ExpandMgxRelation : MgxCmdletBase
 {
-    /// <summary>
-    /// Object to enrich. Accepts a Hashtable (what the Mgx cmdlets emit) or a PSCustomObject;
-    /// the relation is attached in the same shape the object arrived in.
-    /// </summary>
     [Parameter(Mandatory = true, ValueFromPipeline = true)]
     public object InputObject { get; set; } = null!;
 
@@ -275,11 +271,6 @@ public class ExpandMgxRelation : MgxCmdletBase
 
     }
 
-    /// <summary>
-    /// Output all buffered objects with the relation property attached.
-    /// Objects missing IdProperty or with errored IDs get null for the relation.
-    /// Preserves original pipeline order.
-    /// </summary>
     private void OutputBufferedObjects(Dictionary<string, JsonElement[]> resultsById)
     {
         // Cache converted results per ID to avoid redundant JsonToHashtable calls
@@ -294,10 +285,8 @@ public class ExpandMgxRelation : MgxCmdletBase
 
             if (id != null && resultsById.ContainsKey(id))
             {
-                // Converted per input object rather than once per id. Two inputs carrying the
-                // same id used to receive the SAME hashtables, so writing to one output's
-                // relation silently rewrote the others'. The conversion only repeats when an id
-                // actually appears twice, which is the same case that made the sharing visible.
+                // Converted per input object rather than once per id, so two inputs sharing an id
+                // get their own hashtables and writing to one relation cannot rewrite the other
                 var items = resultsById[id];
                 var converted = items.Select(JsonToHashtable).ToArray();
 
@@ -371,7 +360,6 @@ public class ExpandMgxRelation : MgxCmdletBase
         return url;
     }
 
-    /// <summary>True when the URL already carries a $top query option.</summary>
     private static bool HasTopQueryOption(string url)
     {
         var q = url.IndexOf('?');

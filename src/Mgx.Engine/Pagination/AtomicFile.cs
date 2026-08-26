@@ -1,8 +1,6 @@
 namespace Mgx.Engine.Pagination;
 
-/// <summary>
-/// Shared file primitives for the state and checkpoint writers.
-/// </summary>
+/// <summary>Shared file primitives for the state and checkpoint writers.</summary>
 internal static class AtomicFile
 {
     private const int MoveAttempts = 5;

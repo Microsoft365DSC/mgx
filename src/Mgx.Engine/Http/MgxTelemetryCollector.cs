@@ -2,7 +2,7 @@ namespace Mgx.Engine.Http;
 
 /// <summary>
 /// Session-lifetime telemetry aggregator for Graph API operations.
-/// Thread-safe via Interlocked; accumulates across all cmdlet invocations in a session.
+/// Thread-safe via Interlocked. Accumulates across all cmdlet invocations in a session.
 /// Reset via MgxTelemetryCollector.Current.Reset() or Get-MgxTelemetry -Reset.
 /// </summary>
 public sealed class MgxTelemetryCollector
@@ -119,9 +119,7 @@ public sealed class MgxTelemetryCollector
         ContentBytesDownloaded: Interlocked.Read(ref _contentBytes));
 }
 
-/// <summary>
-/// Snapshot of session telemetry from MgxTelemetryCollector.
-/// </summary>
+/// <summary>Snapshot of session telemetry from MgxTelemetryCollector.</summary>
 public sealed record MgxTelemetrySummary(
     long TotalRequests,
     long Succeeded,

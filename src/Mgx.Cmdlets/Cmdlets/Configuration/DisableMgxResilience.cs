@@ -67,7 +67,6 @@ public class DisableMgxResilience : PSCmdlet
                 "Restore original SDK HttpClient (remove Polly resilience)"))
                 return;
 
-            // Verify the current client is actually ours before restoring
             var currentClient = clientProp.GetValue(instance) as HttpClient;
             if (currentClient != null && !ReferenceEquals(currentClient, EnableMgxResilience.ResilientSdkClient))
             {

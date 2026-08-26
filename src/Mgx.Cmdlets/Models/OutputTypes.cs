@@ -27,16 +27,14 @@ public sealed class MgxTelemetryOutput
     public double LastThrottlePercentage { get; set; }
 
     /// <summary>Human-readable per-workload pacing state (adapted caps, slow start,
-    /// proximity, latency vs baseline); null when nothing is active.</summary>
+    /// proximity, latency vs baseline). Null when nothing is active.</summary>
     public string? PacingState { get; set; }
 
     /// <summary>Bytes downloaded through Get-MgxContent (both hops).</summary>
     public long ContentBytesDownloaded { get; set; }
 }
 
-/// <summary>
-/// Output type for Get-MgxOption.
-/// </summary>
+/// <summary>Output type for Get-MgxOption.</summary>
 public sealed class MgxOptionOutput
 {
     public int RateLimitBurst { get; set; }
@@ -56,9 +54,7 @@ public sealed class MgxOptionOutput
     public int BatchItemsPerSecond { get; set; }
 }
 
-/// <summary>
-/// Output type for Get-MgxResilience.
-/// </summary>
+/// <summary>Output type for Get-MgxResilience.</summary>
 public sealed class MgxResilienceOutput
 {
     public bool IsEnabled { get; set; }
@@ -66,9 +62,7 @@ public sealed class MgxResilienceOutput
     public string? Warning { get; set; }
 }
 
-/// <summary>
-/// Output type for Export-MgxCollection summary.
-/// </summary>
+/// <summary>Output type for Export-MgxCollection summary.</summary>
 public sealed class MgxExportResult
 {
     public long ItemCount { get; set; }

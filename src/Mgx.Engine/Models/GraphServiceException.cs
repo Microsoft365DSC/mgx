@@ -19,10 +19,6 @@ public class GraphServiceException : Exception
         ErrorCode = code;
     }
 
-    /// <summary>
-    /// Parse the Graph error response body once, extracting both the formatted message and error code.
-    /// Appends guidance hint when available for known error codes.
-    /// </summary>
     private static string FormatAndExtract(HttpStatusCode statusCode, string responseBody, out string? errorCode)
     {
         errorCode = null;
@@ -33,12 +29,10 @@ public class GraphServiceException : Exception
         {
             using var doc = JsonDocument.Parse(responseBody);
 
-            // Shape-check before every access. TryGetProperty throws InvalidOperationException on
-            // a non-object, and GetString() throws on a non-string - neither is a JsonException,
-            // so valid JSON of an unexpected shape used to escape this method as an exception
-            // thrown from inside an exception's own constructor. Graph always emits the OData
-            // envelope, but the content path's second hop talks to SharePoint, OneDrive and CDN
-            // hosts that are not Graph and answer with whatever they like.
+            // Shape-check before every access. TryGetProperty and GetString throw on the wrong
+            // kind, and neither is a JsonException, so unexpected JSON would escape as an
+            // exception thrown from inside an exception constructor. Graph emits the OData
+            // envelope, but the content path second hop talks to hosts that are not Graph
             if (doc.RootElement.ValueKind != JsonValueKind.Object)
                 return $"HTTP {(int)statusCode}: {statusCode}";
 
@@ -72,10 +66,6 @@ public class GraphServiceException : Exception
         return $"HTTP {(int)statusCode}: {statusCode}";
     }
 
-    /// <summary>
-    /// A string property, or null when absent or not actually a string. Graph nests a non-string
-    /// "message" on some endpoints (an object with a "value"), which GetString() rejects outright.
-    /// </summary>
     private static string? AsString(JsonElement obj, string name)
     {
         if (!obj.TryGetProperty(name, out var v)) return null;

@@ -58,20 +58,9 @@ public class SyncMgxDelta : MgxCmdletBase
     [Parameter]
     public SwitchParameter FullSync { get; set; }
 
-    /// <summary>
-    /// Baseline without enumerating: request only the latest delta token ("sync from now").
-    /// Drive resources take ?token=latest; directory and other resources take
-    /// $deltatoken=latest - the form is chosen automatically from the URI shape.
-    /// Ignored (with a warning) when usable delta state already exists.
-    /// </summary>
     [Parameter]
     public SwitchParameter Latest { get; set; }
 
-    /// <summary>
-    /// Path for the ephemeral mid-run resume checkpoint. Deleted on successful completion;
-    /// any event that invalidates the enumeration (410 Gone, -FullSync, a -Property/-Filter/
-    /// -Prefer change) deletes it too, so a stale position can never be resumed.
-    /// </summary>
     [Parameter]
     public string? CheckpointPath { get; set; }
 
@@ -85,11 +74,6 @@ public class SyncMgxDelta : MgxCmdletBase
 
     private string VersionedBaseUrl => $"{s_graphEndpoint}/{ApiVersion}";
 
-    /// <summary>
-    /// Normalize $select for stable comparison: sort, deduplicate, trim, case-insensitive.
-    /// Saved to DeltaState.Select so future comparisons are order-independent.
-    /// Also used for Prefer tokens - the same normalization semantics apply.
-    /// </summary>
     private static string NormalizeSelect(string? s) =>
         string.IsNullOrEmpty(s) ? "" : string.Join(",",
             s.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -98,7 +82,6 @@ public class SyncMgxDelta : MgxCmdletBase
 
     protected override void BeginProcessing()
     {
-        // Reject absolute URLs (relative paths only)
         if (Uri.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
             Uri.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
         {
@@ -110,11 +93,9 @@ public class SyncMgxDelta : MgxCmdletBase
             return;
         }
 
-        // Validate the delta file is writable before any HTTP call
         var resolvedDeltaPath = GetUnresolvedProviderPathFromPSPath(DeltaPath);
         DeltaState.ValidateWriteAccess(resolvedDeltaPath);
 
-        // Validate -OutputFile is writable before any HTTP call
         string? resolvedOutputPath = null;
         if (OutputFile != null)
         {
@@ -398,10 +379,6 @@ public class SyncMgxDelta : MgxCmdletBase
             resolvedCheckpointPath, normalizedSelect, normalizedPrefer, currentFilter, sw);
     }
 
-    /// <summary>
-    /// The Graph API version a deltaLink was issued by, read from the link itself, or null when
-    /// it cannot be read.
-    /// </summary>
     private static string? ApiVersionOfLink(string? deltaLink)
     {
         if (string.IsNullOrEmpty(deltaLink)) return null;
@@ -424,26 +401,6 @@ public class SyncMgxDelta : MgxCmdletBase
     }
 
 
-    /// <summary>
-    /// Put the files into the state the checkpoint claims, or delete the checkpoint. A checkpoint
-    /// records which file its items were written to and how many bytes they occupy, which makes
-    /// three cases decidable rather than guessed.
-    ///
-    /// A temp is named, so the interrupted run was fresh and its items are in that temp while the
-    /// output still holds the previous sync rows. Recovery promotes the temp over the output, the
-    /// same way a completing run does. Appending would put already consumed rows in front.
-    ///
-    /// No temp is named, so the run was appending to the output and its items are already there.
-    /// Cutting back to the recorded length stops anything written after the last save from being
-    /// written twice.
-    ///
-    /// Neither is recorded, so the checkpoint cannot say which file holds its items. With no
-    /// output the temp holds everything, but against an existing output only re-enumerating can
-    /// avoid losing or repeating items.
-    ///
-    /// When the counted items are in no file the delta link has not moved, so re-enumerating
-    /// costs time and loses nothing, while resuming past them loses them for good.
-    /// </summary>
     private void ReconcileCheckpointWithFiles(string checkpointPath, string outputPath, PaginationCheckpoint checkpoint)
     {
         if (checkpoint.DataLength is not { } dataLength)
@@ -610,15 +567,13 @@ public class SyncMgxDelta : MgxCmdletBase
                 long removedCount = 0;
                 long totalProcessed = resumedItemCount;
                 // Seeded from the resume skip, not zero. PageIterator drops skipped items before
-                // the consumer sees them, so a counter starting at zero would record only the
-                // newly written items of the first resumed page. A mid-page checkpoint there then
-                // claimed fewer items of that page than the output actually held, and the next
-                // resume skipped too few and re-emitted the difference - up to a page's worth of
-                // duplicate lines, which is exactly what the comment below says cannot happen.
+                // the consumer sees them, so a counter starting at zero records only the newly
+                // written items of the first resumed page and a mid-page checkpoint there would
+                // under-count the page
                 int pageItemsWritten = resume?.SkipOnFirstPage ?? 0;
 
                 // What the next two checkpoint sites should say about WHERE the counted items
-                // are. Set once the writer exists; null on the pipeline path, which has no file.
+                // are. Set once the writer exists. Null on the pipeline path, which has no file.
                 string? checkpointTempFile = null;
                 long? checkpointDataLength = null;
 
@@ -653,7 +608,7 @@ public class SyncMgxDelta : MgxCmdletBase
                 if (outputPath != null)
                 {
                     // JSONL output mode. Fresh runs write to a temp file and promote on
-                    // success; checkpointed resumes append to the already-promoted output.
+                    // success. Checkpointed resumes append to the already-promoted output.
                     if (!appendOutput)
                     {
                         // Nothing is being resumed, so any leftover temp is an orphan. Orphans are
@@ -772,7 +727,7 @@ public class SyncMgxDelta : MgxCmdletBase
                                 }
                                 catch (Exception promoteEx) when (promoteEx is IOException or UnauthorizedAccessException)
                                 {
-                                    // Promotion is best-effort; fall back to the old cleanup.
+                                    // Promotion is best-effort. Fall back to the old cleanup.
                                 }
                             }
                             if (!promoted)

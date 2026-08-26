@@ -51,7 +51,7 @@ internal static class AdaptiveRequestPacer
 
     private const int Buckets = AdaptivePacing.WorkloadBucketCount;
 
-    // --- configuration (set via Configure, from ResiliencePipelineFactory.GetOrCreate) ---
+    // Configuration, set through Configure
 
     /// <summary>
     /// Test seam. The integration suite disables the gate process-wide via a
@@ -101,8 +101,8 @@ internal static class AdaptiveRequestPacer
     internal static void Configure(ResilientGraphClientOptions options)
     {
         s_enabled = !options.NoAdaptivePacing;
-        // The HTTP token bucket is the hard backstop; the pacer only ever caps *below* it.
-        // With the bucket disabled there is no configured rate to recover toward, so keep
+        // The HTTP token bucket is the hard backstop and the pacer only caps below it. With the
+        // bucket disabled there is no configured rate to recover toward, so keep
         // the default ceiling rather than inventing one.
         s_ceilingRate = options.NoRateLimit ? 50 : options.RateLimitPerSecond;
         s_maxDelayMs = options.MaxRetryAfterSeconds * 1000;
@@ -128,12 +128,9 @@ internal static class AdaptiveRequestPacer
                 s_lastLatencyMs[i] = 0;
             }
         }
-        // Configuration is deliberately NOT reverted here. Reset clears LEARNED state - adapted
-        // caps, slow start, gauges, baselines. Resetting s_enabled/s_ceilingRate/s_maxDelayMs to
-        // defaults re-enabled pacing under a client built with NoAdaptivePacing, which then
-        // recorded activations until the next cmdlet invocation happened to re-Configure. The
-        // exposed window was in-flight fan-outs and parallel runspaces, where no re-Configure
-        // intervenes. Callers changing configuration call Configure; it is not Reset's business.
+        // Reset clears learned state only: adapted caps, slow start, gauges and baselines.
+        // Reverting configuration here would re-enable pacing under a client built with
+        // NoAdaptivePacing. Callers changing configuration call Configure
     }
 
     // --- pure math (the testable core) ---
@@ -147,7 +144,7 @@ internal static class AdaptiveRequestPacer
 
     /// <summary>
     /// Per-request delay from the last reported throttle percentage. Zero below the documented
-    /// 0.8 emission floor or when the report has gone stale; linear ramp to the maximum at 1.2.
+    /// 0.8 emission floor or when the report has gone stale. Linear ramp to the maximum at 1.2.
     /// </summary>
     internal static long DampingDelayMs(int perMille, long ageTicks)
     {
@@ -177,9 +174,9 @@ internal static class AdaptiveRequestPacer
     /// </summary>
     internal static async ValueTask<long> WaitAsync(WorkloadBucket bucket, CancellationToken cancellationToken)
     {
-        // Batch envelopes are exempt by construction - GraphBatchClient passes paceGate: false
-        // and runs its own item-level AIMD. Guarding here as well means a batch can never claim
-        // a slot even if a future caller forgets the flag, and keeps two AIMD controllers from
+        // GraphBatchClient passes paceGate false and runs its own item-level AIMD. Guarding here
+        // too means a batch cannot claim a slot if a caller forgets the flag, and keeps two AIMD
+        // controllers from
         // compounding their backoff on one workload.
         if (bucket == WorkloadBucket.Batch) return 0;
 
@@ -196,23 +193,21 @@ internal static class AdaptiveRequestPacer
             if (s_adaptedRate[b] > 0 && AdaptivePacing.AdaptedRateHasExpired(s_lastThrottleTicks[b], now))
                 s_adaptedRate[b] = 0;
 
-            // Cold bucket (first use or quiet period): enter slow start. An active adapted
-            // cap wins over slow start, so don't stack one on top of the other.
+            // A cold bucket enters slow start. An active adapted cap wins, so they do not stack
             var quietTicks = now - s_lastRequestTicks[b];
             var cold = s_lastRequestTicks[b] == 0
                 || quietTicks > (long)(AdaptivePacing.AdaptiveRecoveryWindow.TotalSeconds * Stopwatch.Frequency);
             if (cold && s_adaptedRate[b] == 0)
             {
-                // Clamp to the ceiling, as the throttle path already does. Without it, a caller
-                // configuring -RateLimitPerSecond 1..3 (values the tuning help recommends) got a
-                // slow-start cap of 4 sitting ABOVE their configured rate, and telemetry
+                // Clamp to the ceiling, as the throttle path does, or a low -RateLimitPerSecond
+                // gets a slow-start cap above the configured rate, and telemetry
                 // reporting "slow-start 4 rps" against a 2 rps ceiling.
                 s_slowStartRate[b] = Math.Min(SlowStartInitialRate, s_ceilingRate);
                 s_lastRampTicks[b] = now;
             }
 
-            // Ramp caps once per clean interval: additive recovery for the adapted cap,
-            // doubling for slow start. A cap that reaches the ceiling deactivates.
+            // Caps ramp once per clean interval, additively for the adapted cap and by doubling
+            // for slow start. A cap reaching the ceiling deactivates
             var rampTicks = (long)(RampInterval.TotalSeconds * Stopwatch.Frequency);
             if (now - s_lastRampTicks[b] >= rampTicks)
             {
@@ -236,7 +231,7 @@ internal static class AdaptiveRequestPacer
             intervalTicks = ComputeIntervalTicks(cap, damping);
         }
 
-        // Fast path: nothing active, but a Retry-After push may still hold the bucket.
+        // Nothing active, though a Retry-After push may still hold the bucket
         long targetTicks;
         long claimNow;
         while (true)
@@ -344,7 +339,7 @@ internal static class AdaptiveRequestPacer
     /// <summary>
     /// Record transport latency for the bucket (per attempt, network time only). Maintains a
     /// slow EMA baseline so the SPO soft-clamp - latency stretching 5x+ with no 429s and no
-    /// headers - is visible in telemetry. Telemetry-only in 2.1; not a pacing input.
+    /// headers - is visible in telemetry. Telemetry-only in 2.1. Not a pacing input.
     /// </summary>
     internal static void RecordLatency(WorkloadBucket bucket, long httpMs)
     {

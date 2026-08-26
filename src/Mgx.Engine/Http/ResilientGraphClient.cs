@@ -125,11 +125,6 @@ public sealed class ResilientGraphClient : IDisposable
             DebugWriter(msg);
     }
 
-    /// <summary>
-    /// POST is the only non-idempotent method in Graph API.
-    /// GET/PUT/DELETE are idempotent by HTTP spec.
-    /// PATCH in Graph is always absolute property assignment (not incremental), so it's idempotent.
-    /// </summary>
     private static bool IsIdempotent(HttpMethod method) =>
         method != HttpMethod.Post;
 
@@ -231,7 +226,7 @@ public sealed class ResilientGraphClient : IDisposable
                     var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ctx.CancellationToken);
                     MgxTelemetryCollector.Current.RecordHttpTime(httpSw.ElapsedMilliseconds);
                     // Per-attempt network time feeds the latency baseline (telemetry-only:
-                    // makes the SPO soft-clamp visible; not a pacing input in 2.1).
+                    // makes the SPO soft-clamp visible. Not a pacing input in 2.1).
                     AdaptiveRequestPacer.RecordLatency(bucket, httpSw.ElapsedMilliseconds);
 
                     if (DebugEnabled)
@@ -288,18 +283,14 @@ public sealed class ResilientGraphClient : IDisposable
         }
     }
 
-    /// <summary>
-    /// Send a GET request through the resilience pipeline.
-    /// </summary>
+    /// <summary>Send a GET request through the resilience pipeline.</summary>
     public Task<HttpResponseMessage> GetAsync(
         string requestUri,
         CancellationToken cancellationToken = default,
         Dictionary<string, string>? headers = null)
         => SendAsync(HttpMethod.Get, requestUri, headers: headers, cancellationToken: cancellationToken);
 
-    /// <summary>
-    /// Send a POST request through the resilience pipeline.
-    /// </summary>
+    /// <summary>Send a POST request through the resilience pipeline.</summary>
     public Task<HttpResponseMessage> PostAsync(
         string requestUri,
         HttpContent content,
@@ -322,9 +313,7 @@ public sealed class ResilientGraphClient : IDisposable
         CancellationToken cancellationToken = default)
         => GraphContentClient.GetContentAsync(this, requestUri, range, headers, cancellationToken);
 
-    /// <summary>
-    /// Fetch a collection page and deserialize.
-    /// </summary>
+    /// <summary>Fetch a collection page and deserialize.</summary>
     public async Task<GraphRawCollectionResponse> GetCollectionPageAsync(
         string requestUri,
         CancellationToken cancellationToken = default,
@@ -356,11 +345,6 @@ public sealed class ResilientGraphClient : IDisposable
         return cts;
     }
 
-    /// <summary>
-    /// Buffer the response body and queue a trace line for it. Buffering is what makes the body
-    /// readable twice: the caller still reads it normally afterwards.
-    /// A trace must never break a request, so a failed read degrades to a headers-only line.
-    /// </summary>
     private async Task TraceResponseAsync(HttpResponseMessage response, long elapsedMs, CancellationToken ct)
     {
         string? body = null;
@@ -386,16 +370,6 @@ public sealed class ResilientGraphClient : IDisposable
         throw new GraphServiceException(response.StatusCode, body);
     }
 
-    /// <summary>
-    /// Log Graph throttle proximity headers to verbose output.
-    /// These headers are officially documented but conditionally sent by Graph:
-    /// - x-ms-throttle-limit-percentage: only appears when >80% of throttle budget consumed
-    /// - x-ms-throttle-scope: typically only on 429 responses (format: Scope/Limit/AppId/TenantId)
-    /// - x-ms-throttle-information: diagnostic reason on 429 (e.g., CPULimitExceeded, ResourceUnitLimitExceeded)
-    /// Reliability varies by Graph endpoint. Some workloads never send these headers.
-    /// Tested against live tenant: headers do not appear at low request volumes (50 req).
-    /// Only logs when headers are present and VerboseWriter is set.
-    /// </summary>
     private void LogThrottleHeaders(HttpResponseMessage response)
     {
         if (VerboseWriter == null && WarningWriter == null) return;
@@ -411,7 +385,7 @@ public sealed class ResilientGraphClient : IDisposable
                 : null;
 
             // Header value is a ratio (0.8 = 80%, 1.2 = 120%). Scale: 0.8-1.8.
-            // Display as percentage for clarity; fall back to raw value if unparseable.
+            // Display as percentage for clarity. Fall back to raw value if unparseable.
             string msg;
             if (double.TryParse(pctStr, System.Globalization.NumberStyles.Any,
                     System.Globalization.CultureInfo.InvariantCulture, out var pct))
