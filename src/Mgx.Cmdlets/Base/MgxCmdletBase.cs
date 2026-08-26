@@ -64,12 +64,7 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         // empty and the cmdlet would terminate before reaching any HTTP work
         var testTransport = s_testTransportFactory;
         if (testTransport != null)
-        {
-            // The supplied client is mgx-owned and has no redirect handler, so the content path
-            // may use it
-            s_ownsHttpClient = true;
             return _client = ConfigureClient(testTransport(), s_clientOptions);
-        }
 
         var identity = GetCurrentAuthIdentity(WriteVerbose);
         if (string.IsNullOrEmpty(identity.Fingerprint))
@@ -656,7 +651,8 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     /// client ships a RedirectHandler that auto-follows a content 302 to a host mgx never
     /// validated, so Get-MgxContent fails closed when this is false.
     /// </summary>
-    protected static bool TransportIsOwned => s_ownsHttpClient;
+    // A test transport is mgx-built and follows no redirects, so the content path may use it
+    protected static bool TransportIsOwned => s_ownsHttpClient || s_testTransportFactory != null;
 
     /// <summary>
     /// Drain buffered verbose messages from the resilience pipeline.

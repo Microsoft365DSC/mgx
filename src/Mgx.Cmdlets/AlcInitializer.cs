@@ -72,12 +72,6 @@ public class AlcInitializer : IModuleAssemblyInitializer, IModuleAssemblyCleanup
         try
         {
             Base.MgxCmdletBase.ResetHttpClient();
-
-            // Same rule: the AssemblyLoad hook is static state on MgxCmdletBase, so it is
-            // released here rather than after the detach below. Its own body touches nothing
-            // from Dependencies/, but keeping every cleanup on this side of the detach means
-            // the invariant holds no matter what either method grows into later.
-            Base.MgxCmdletBase.DetachAssemblyLoadHandler();
         }
         catch (Exception ex)
         {
@@ -87,9 +81,8 @@ public class AlcInitializer : IModuleAssemblyInitializer, IModuleAssemblyCleanup
 
         AssemblyLoadContext.Default.Resolving -= ResolveDependency;
 
-        // After the resolver: this only detaches an event handler, needs no dependency
-        // resolution, and must not run before ResetHttpClient (which may trigger loads
-        // that the type cache should still observe).
+        // After the resolver, since this needs no dependency resolution and must not run before
+        // ResetHttpClient, which may trigger loads the type cache should still observe
         Base.MgxCmdletBase.DetachAssemblyLoadHandler();
     }
 }

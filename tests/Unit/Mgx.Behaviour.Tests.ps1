@@ -546,9 +546,9 @@ Describe 'Disable-MgxResilience Parameter Compatibility' {
 }
 
 Describe 'Get-MgxResilience Parameter Compatibility' {
-    It 'Should have OutputType of PSObject' {
+    It 'Should declare the type it actually emits' {
         $outputType = (Get-Command Get-MgxResilience).OutputType
-        $outputType.Name | Should -Contain 'System.Management.Automation.PSObject'
+        $outputType.Name | Should -Contain 'Mgx.Cmdlets.Models.MgxResilienceOutput'
     }
 
     It 'Should have no mandatory parameters' {

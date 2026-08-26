@@ -396,7 +396,7 @@ function Write-BenchResult {
     $meta = [pscustomobject]@{
         Result     = $Result
         Telemetry  = $telemetry
-        MgxVersion = (Get-Module Mgx -ErrorAction SilentlyContinue)?.Version?.ToString()
+        MgxVersion = (Get-Module M365DSC.mgx -ErrorAction SilentlyContinue)?.Version?.ToString()
         SdkVersion = (Get-Module Microsoft.Graph.Authentication -ErrorAction SilentlyContinue)?.Version?.ToString()
         PSVersion  = $PSVersionTable.PSVersion.ToString()
         RecordedAt = (Get-Date).ToString('o')

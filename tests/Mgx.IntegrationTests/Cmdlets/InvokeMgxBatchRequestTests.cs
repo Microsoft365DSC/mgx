@@ -64,4 +64,28 @@ public class InvokeMgxBatchRequestTests
         Assert.Equal("/groups/123", url);
     }
 
+
+    [Fact]
+    public void A_failed_batch_item_is_reported_as_an_error_without_a_dead_letter_path()
+    {
+        // The per-item errors are what makes -ErrorAction Stop trip and $Error fill in
+        var handler = new StubHttpMessageHandler().EnqueueJson(HttpStatusCode.OK, """
+            {"responses":[
+              {"id":"1","status":200,"body":{"id":"u0"}},
+              {"id":"2","status":403,"body":{"error":{"code":"Authorization_RequestDenied","message":"denied"}}}
+            ]}
+            """);
+        using var host = new MgxTestHost(handler);
+
+        var result = host.Run(ps =>
+        {
+            ps.AddCommand("Invoke-MgxBatchRequest")
+                .AddParameter("Uri", new[] { "/users/u0", "/users/u1" })
+                .AddParameter("Method", "GET");
+        });
+
+        Assert.Null(result.Terminating);
+        Assert.Contains(result.Errors, e => e.FullyQualifiedErrorId.Contains("BatchItemError"));
+        Assert.Contains(result.Errors, e => e.Exception.Message.Contains("Authorization_RequestDenied"));
+    }
 }

@@ -263,7 +263,13 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     WriteWarning($"Failed to write dead-letter file '{resolvedDeadLetterPath}': {ex.Message}");
+                }
 
+                if (failedCount > 0)
+                    WriteVerbose($"Wrote {failedCount} failed items to dead-letter file: {resolvedDeadLetterPath}");
+            }
+
+            // Per-item errors, so -ErrorAction Stop trips and $Error is populated
             for (int i = 0; i < results.Count; i++)
             {
                 var (_, item) = results[i];
@@ -286,12 +292,6 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                     WriteError(new ErrorRecord(itemError, "BatchItemError",
                         MapStatusToCategory((HttpStatusCode)item.Status), input.Url));
                 }
-            }
-
-                }
-
-                if (failedCount > 0)
-                    WriteVerbose($"Wrote {failedCount} failed items to dead-letter file: {resolvedDeadLetterPath}");
             }
 
             WriteBatchTelemetry(telemetry);

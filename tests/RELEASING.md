@@ -16,13 +16,11 @@ Every command below runs from the repository root, not from this directory.
    comparison or the exceptions Windows raises where Unix raises different ones - each of those
    has shipped a defect here.
 
-2. **The live suite, actually run.**
-   ```
-   pwsh -c 'Invoke-Pester -Path ./tests/Live'
-   ```
-   With credentials, against a real tenant. The mocked suites cannot see a request Graph
+2. **A real tenant, by hand.**
+   This fork does not ship a live Pester suite. The mocked suites cannot see a request Graph
    rejects: `Enable-MgxResilience` once shipped a client with no `BaseAddress`, breaking every
-   relative-URI call, with every test green. "Skipped" is not a pass - see `tests/Live/README.md`.
+   relative-URI call, with every test green. Before a release, connect to a tenant and run each
+   cmdlet once, including a paged read, a batch write and a delta sync.
 
 3. **Install it the way a user does.** Build Release, then in a *fresh* shell with only the
    Gallery dependencies present, import the staged `Modules/M365DSC.mgx/`, run `Test-ModuleManifest`, and

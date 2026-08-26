@@ -127,7 +127,7 @@
     <command:relatedLinks>
       <maml:navigationLink>
         <maml:linkText>Online Version:</maml:linkText>
-        <maml:uri>https://github.com/gromedev/mgx/blob/main/module/help/Disable-MgxResilience.md</maml:uri>
+        <maml:uri>https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Disable-MgxResilience.md</maml:uri>
       </maml:navigationLink>
       <maml:navigationLink>
         <maml:linkText>Enable-MgxResilience</maml:linkText>
@@ -280,7 +280,7 @@ Enable-MgxResilience   # Re-inject for the new connection</dev:code>
     <command:relatedLinks>
       <maml:navigationLink>
         <maml:linkText>Online Version:</maml:linkText>
-        <maml:uri>https://github.com/gromedev/mgx/blob/main/module/help/Enable-MgxResilience.md</maml:uri>
+        <maml:uri>https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Enable-MgxResilience.md</maml:uri>
       </maml:navigationLink>
       <maml:navigationLink>
         <maml:linkText>Disable-MgxResilience</maml:linkText>
@@ -687,7 +687,7 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
     <command:relatedLinks>
       <maml:navigationLink>
         <maml:linkText>Online Version:</maml:linkText>
-        <maml:uri>https://github.com/gromedev/mgx/blob/main/module/help/Expand-MgxRelation.md</maml:uri>
+        <maml:uri>https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Expand-MgxRelation.md</maml:uri>
       </maml:navigationLink>
       <maml:navigationLink>
         <maml:linkText>Invoke-MgxRequest</maml:linkText>
@@ -1228,7 +1228,7 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
     <command:relatedLinks>
       <maml:navigationLink>
         <maml:linkText>Online Version:</maml:linkText>
-        <maml:uri>https://github.com/gromedev/mgx/blob/main/module/help/Export-MgxCollection.md</maml:uri>
+        <maml:uri>https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Export-MgxCollection.md</maml:uri>
       </maml:navigationLink>
       <maml:navigationLink>
         <maml:linkText>Invoke-MgxRequest</maml:linkText>
@@ -1648,7 +1648,7 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
     <command:relatedLinks>
       <maml:navigationLink>
         <maml:linkText>Online Version:</maml:linkText>
-        <maml:uri>https://github.com/gromedev/mgx/blob/main/module/help/Get-MgxContent.md</maml:uri>
+        <maml:uri>https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Get-MgxContent.md</maml:uri>
       </maml:navigationLink>
       <maml:navigationLink>
         <maml:linkText>Invoke-MgxRequest</maml:linkText>
@@ -1726,7 +1726,7 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
     <command:relatedLinks>
       <maml:navigationLink>
         <maml:linkText>Online Version:</maml:linkText>
-        <maml:uri>https://github.com/gromedev/mgx/blob/main/module/help/Get-MgxOption.md</maml:uri>
+        <maml:uri>https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Get-MgxOption.md</maml:uri>
       </maml:navigationLink>
       <maml:navigationLink>
         <maml:linkText>Set-MgxOption</maml:linkText>
@@ -1765,10 +1765,10 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
     <command:returnValues>
       <command:returnValue>
         <dev:type>
-          <maml:name>System.Management.Automation.PSObject</maml:name>
+          <maml:name>Mgx.Cmdlets.Models.MgxResilienceOutput</maml:name>
         </dev:type>
         <maml:description>
-          <maml:para>Object with IsEnabled (bool) and IsActive (bool) properties.</maml:para>
+          <maml:para>Object with IsEnabled (bool), IsActive (bool) and an optional Warning (string).</maml:para>
         </maml:description>
       </command:returnValue>
     </command:returnValues>
@@ -1798,7 +1798,7 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
     <command:relatedLinks>
       <maml:navigationLink>
         <maml:linkText>Online Version:</maml:linkText>
-        <maml:uri>https://github.com/gromedev/mgx/blob/main/module/help/Get-MgxResilience.md</maml:uri>
+        <maml:uri>https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Get-MgxResilience.md</maml:uri>
       </maml:navigationLink>
       <maml:navigationLink>
         <maml:linkText>Enable-MgxResilience</maml:linkText>
@@ -1912,7 +1912,7 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
     <command:relatedLinks>
       <maml:navigationLink>
         <maml:linkText>Online Version:</maml:linkText>
-        <maml:uri>https://github.com/gromedev/mgx/blob/main/module/help/Get-MgxTelemetry.md</maml:uri>
+        <maml:uri>https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Get-MgxTelemetry.md</maml:uri>
       </maml:navigationLink>
       <maml:navigationLink>
         <maml:linkText>Set-MgxOption</maml:linkText>
@@ -2341,7 +2341,7 @@ foreach ($url in $urls) { $url | Invoke-MgxBatchRequest }</dev:code>
     <command:relatedLinks>
       <maml:navigationLink>
         <maml:linkText>Online Version:</maml:linkText>
-        <maml:uri>https://github.com/gromedev/mgx/blob/main/module/help/Invoke-MgxBatchRequest.md</maml:uri>
+        <maml:uri>https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Invoke-MgxBatchRequest.md</maml:uri>
       </maml:navigationLink>
       <maml:navigationLink>
         <maml:linkText>Invoke-MgxRequest</maml:linkText>
@@ -3149,7 +3149,7 @@ Import-Csv ./users.csv |
     <command:relatedLinks>
       <maml:navigationLink>
         <maml:linkText>Online Version:</maml:linkText>
-        <maml:uri>https://github.com/gromedev/mgx/blob/main/module/help/Invoke-MgxRequest.md</maml:uri>
+        <maml:uri>https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Invoke-MgxRequest.md</maml:uri>
       </maml:navigationLink>
       <maml:navigationLink>
         <maml:linkText>Invoke-MgxBatchRequest</maml:linkText>
@@ -3635,7 +3635,7 @@ Import-Csv ./users.csv |
     <command:relatedLinks>
       <maml:navigationLink>
         <maml:linkText>Online Version:</maml:linkText>
-        <maml:uri>https://github.com/gromedev/mgx/blob/main/module/help/Set-MgxOption.md</maml:uri>
+        <maml:uri>https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Set-MgxOption.md</maml:uri>
       </maml:navigationLink>
       <maml:navigationLink>
         <maml:linkText>Get-MgxOption</maml:linkText>
@@ -4090,7 +4090,7 @@ Sync-MgxDelta /groups/delta -DeltaPath groups.delta           # only what change
     <command:relatedLinks>
       <maml:navigationLink>
         <maml:linkText>Online Version:</maml:linkText>
-        <maml:uri>https://github.com/gromedev/mgx/blob/main/module/help/Sync-MgxDelta.md</maml:uri>
+        <maml:uri>https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Sync-MgxDelta.md</maml:uri>
       </maml:navigationLink>
       <maml:navigationLink>
         <maml:linkText>Export-MgxCollection</maml:linkText>

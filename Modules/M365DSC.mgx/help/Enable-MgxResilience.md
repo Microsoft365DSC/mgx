@@ -1,7 +1,7 @@
 ---
 external help file: Mgx.Cmdlets.dll-Help.xml
 Module Name: Mgx
-online version: https://github.com/gromedev/mgx/blob/main/module/help/Enable-MgxResilience.md
+online version: https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Enable-MgxResilience.md
 schema: 2.0.0
 ---
 
