@@ -5,6 +5,9 @@ using System.Management.Automation;
 using System.Management.Automation.Language;
 using Mgx.Cmdlets.Base;
 
+#pragma warning disable CS8625 // Cannot convert null literal to non-nullable reference type
+#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type
+
 namespace Mgx.IntegrationTests.Cmdlets;
 
 /// <summary>

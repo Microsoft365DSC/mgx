@@ -13,6 +13,20 @@ namespace Mgx.IntegrationTests.Cmdlets;
 /// </summary>
 public class ExpandMgxRelationTests
 {
+    // Use reflection to test private methods - cast to non-nullable since we control the test setup
+    private static T InvokeMethod<T>(object target, string methodName, params object?[] parameters)
+    {
+        var method = target.GetType().GetMethod(methodName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static);
+        var result = method!.Invoke(target, parameters);
+        return (T)result!;
+    }
+
+    private static T InvokeMethod<T>(Type type, string methodName, params object?[] parameters)
+    {
+        var method = type.GetMethod(methodName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        var result = method!.Invoke(null, parameters);
+        return (T)result!;
+    }
     [Fact]
     public void ProcessRecord_MissingIdPlaceholder_ThrowsError()
     {
@@ -47,11 +61,7 @@ public class ExpandMgxRelationTests
             ApiVersion = "v1.0"
         };
 
-        // Use reflection to test private method
-        var method = typeof(ExpandMgxRelation).GetMethod("BuildUrl",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-        var url = (string)method!.Invoke(cmdlet, ["user123"]);
+        var url = InvokeMethod<string>(cmdlet, "BuildUrl", "user123");
 
         Assert.Contains("user123", url);
         Assert.Contains("/users/user123/manager", url);
@@ -67,10 +77,7 @@ public class ExpandMgxRelationTests
             Top = 10
         };
 
-        var method = typeof(ExpandMgxRelation).GetMethod("BuildUrl",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-        var url = (string)method!.Invoke(cmdlet, ["user123"]);
+        var url = InvokeMethod<string>(cmdlet, "BuildUrl", "user123");
 
         Assert.Contains("$top=10", url);
     }
@@ -79,12 +86,9 @@ public class ExpandMgxRelationTests
     public void GetStatusCodeFromException_ReturnsGraphServiceExceptionStatus()
     {
         var cmdlet = new ExpandMgxRelation();
-        var method = typeof(ExpandMgxRelation).GetMethod("GetStatusCodeFromException",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-
         var ex = new Mgx.Engine.Models.GraphServiceException(HttpStatusCode.NotFound, "Not found");
 
-        var status = (HttpStatusCode?)method!.Invoke(null, [ex]);
+        var status = InvokeMethod<HttpStatusCode?>(cmdlet, "GetStatusCodeFromException", ex);
 
         Assert.Equal(HttpStatusCode.NotFound, status);
     }
@@ -93,12 +97,9 @@ public class ExpandMgxRelationTests
     public void GetStatusCodeFromException_ReturnsHttpRequestExceptionStatus()
     {
         var cmdlet = new ExpandMgxRelation();
-        var method = typeof(ExpandMgxRelation).GetMethod("GetStatusCodeFromException",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-
         var ex = new HttpRequestException("Error", null, HttpStatusCode.ServiceUnavailable);
 
-        var status = (HttpStatusCode?)method!.Invoke(null, [ex]);
+        var status = InvokeMethod<HttpStatusCode?>(cmdlet, "GetStatusCodeFromException", ex);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, status);
     }
@@ -106,23 +107,16 @@ public class ExpandMgxRelationTests
     [Fact]
     public void MapStatusToCategory_MapsCommonCodes()
     {
-        var method = typeof(Mgx.Cmdlets.Base.MgxCmdletBase).GetMethod("MapStatusToCategory",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-
-        var category = method.Invoke(null, [HttpStatusCode.NotFound]);
-        Assert.NotNull(category);
+        var category = InvokeMethod<ErrorCategory>(typeof(Mgx.Cmdlets.Base.MgxCmdletBase), "MapStatusToCategory", HttpStatusCode.NotFound);
         Assert.Equal(ErrorCategory.ObjectNotFound, category);
 
-        category = method.Invoke(null, [HttpStatusCode.Forbidden]);
-        Assert.NotNull(category);
+        category = InvokeMethod<ErrorCategory>(typeof(Mgx.Cmdlets.Base.MgxCmdletBase), "MapStatusToCategory", HttpStatusCode.Forbidden);
         Assert.Equal(ErrorCategory.PermissionDenied, category);
 
-        category = method.Invoke(null, [HttpStatusCode.BadRequest]);
-        Assert.NotNull(category);
+        category = InvokeMethod<ErrorCategory>(typeof(Mgx.Cmdlets.Base.MgxCmdletBase), "MapStatusToCategory", HttpStatusCode.BadRequest);
         Assert.Equal(ErrorCategory.InvalidArgument, category);
 
-        category = method.Invoke(null, [HttpStatusCode.ServiceUnavailable]);
-        Assert.NotNull(category);
+        category = InvokeMethod<ErrorCategory>(typeof(Mgx.Cmdlets.Base.MgxCmdletBase), "MapStatusToCategory", HttpStatusCode.ServiceUnavailable);
         Assert.Equal(ErrorCategory.NotSpecified, category);
     }
 }

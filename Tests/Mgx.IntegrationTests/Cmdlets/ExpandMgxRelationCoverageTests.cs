@@ -14,6 +14,13 @@ namespace Mgx.IntegrationTests.Cmdlets;
 /// </summary>
 public class ExpandMgxRelationCoverageTests
 {
+    // Use reflection to test private methods - cast to non-nullable since we control the test setup
+    private static T InvokeMethod<T>(object target, string methodName, params object?[] parameters)
+    {
+        var method = target.GetType().GetMethod(methodName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static);
+        var result = method!.Invoke(target, parameters);
+        return (T)result!;
+    }
     [Fact]
     public void BeginProcessing_MissingIdPlaceholder_ThrowsError()
     {
@@ -108,10 +115,7 @@ public class ExpandMgxRelationCoverageTests
             ApiVersion = "v1.0"
         };
 
-        var method = typeof(ExpandMgxRelation).GetMethod("BuildUrl",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-        var url = (string)method!.Invoke(cmdlet, ["user123"]);
+        var url = InvokeMethod<string>(cmdlet, "BuildUrl", "user123");
 
         Assert.Contains("user123", url);
         Assert.Contains("/users/user123/manager", url);
@@ -127,10 +131,7 @@ public class ExpandMgxRelationCoverageTests
             Top = 10
         };
 
-        var method = typeof(ExpandMgxRelation).GetMethod("BuildUrl",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-        var url = (string)method!.Invoke(cmdlet, ["user123"]);
+        var url = InvokeMethod<string>(cmdlet, "BuildUrl", "user123");
 
         Assert.Contains("$top=10", url);
     }
@@ -144,10 +145,7 @@ public class ExpandMgxRelationCoverageTests
             ApiVersion = "v1.0"
         };
 
-        var method = typeof(ExpandMgxRelation).GetMethod("BuildUrl",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-        var url = (string)method!.Invoke(cmdlet, ["user@domain.com"]);
+        var url = InvokeMethod<string>(cmdlet, "BuildUrl", "user@domain.com");
 
         Assert.Contains("user%40domain.com", url);
     }

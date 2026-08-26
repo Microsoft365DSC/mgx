@@ -96,10 +96,11 @@ public class PaginationCheckpointFinalCoverageTests : IDisposable
     }
 
     [Fact]
-    public void ConcurrentSaveAndLoad_DoesNotCorrupt()
+    public async Task ConcurrentSaveAndLoad_DoesNotCorrupt()
     {
         var path = PathFor("concurrent.checkpoint");
         var tasks = new List<Task>();
+        var ct = TestContext.Current.CancellationToken;
 
         for (int i = 0; i < 20; i++)
         {
@@ -114,10 +115,10 @@ public class PaginationCheckpointFinalCoverageTests : IDisposable
                     PageItemsAlreadyWritten = idx
                 };
                 cp.Save(path);
-            }));
+            }, ct));
         }
 
-        Task.WaitAll(tasks.ToArray());
+        await Task.WhenAll(tasks);
 
         var loaded = PaginationCheckpoint.Load(path);
         Assert.NotNull(loaded);

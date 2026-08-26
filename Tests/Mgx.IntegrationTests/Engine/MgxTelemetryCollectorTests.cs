@@ -2,12 +2,14 @@ using System;
 using System.Net;
 using Mgx.Engine.Http;
 using Mgx.IntegrationTests.Fakes;
+using Mgx.IntegrationTests.Engine;
 
 namespace Mgx.IntegrationTests.Engine;
 
 /// <summary>
 /// Tests for MgxTelemetryCollector to boost coverage to 95%+.
 /// </summary>
+[Collection(ResilienceCollection.Name)]
 public class MgxTelemetryCollectorTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -126,22 +128,23 @@ public class MgxTelemetryCollectorTests
     }
 
     [Fact]
-    public void ConcurrentCalls_AreThreadSafe()
+    public async Task ConcurrentCalls_AreThreadSafe()
     {
         MgxTelemetryCollector.Current.Reset();
 
-        var tasks = new System.Threading.Tasks.Task[100];
+        var tasks = new List<System.Threading.Tasks.Task>();
+        var ct = TestContext.Current.CancellationToken;
         for (int i = 0; i < 100; i++)
         {
-            tasks[i] = System.Threading.Tasks.Task.Run(() =>
+            tasks.Add(System.Threading.Tasks.Task.Run(() =>
             {
                 MgxTelemetryCollector.Current.RecordRequest(true, 0);
                 MgxTelemetryCollector.Current.RecordRetry(true, 1);
                 MgxTelemetryCollector.Current.RecordRetry(false, 1);
-            });
+            }, ct));
         }
 
-        System.Threading.Tasks.Task.WaitAll(tasks);
+        await System.Threading.Tasks.Task.WhenAll(tasks);
 
         var summary = MgxTelemetryCollector.Current.GetSummary();
         Assert.Equal(100, summary.TotalRequests);

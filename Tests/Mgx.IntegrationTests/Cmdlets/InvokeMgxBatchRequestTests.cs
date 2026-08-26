@@ -14,6 +14,13 @@ namespace Mgx.IntegrationTests.Cmdlets;
 /// </summary>
 public class InvokeMgxBatchRequestTests
 {
+    // Use reflection to test private methods - cast to non-nullable since we control the test setup
+    private static T InvokeMethod<T>(object target, string methodName, params object?[] parameters)
+    {
+        var method = target.GetType().GetMethod(methodName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static);
+        var result = method!.Invoke(target, parameters);
+        return (T)result!;
+    }
     [Fact]
     public void ProcessRecord_SearchRequiresConsistencyLevel_ThrowsError()
     {
@@ -98,11 +105,7 @@ public class InvokeMgxBatchRequestTests
     public void NormalizeToRelativeUrl_HandlesAbsoluteUrl()
     {
         var cmdlet = new InvokeMgxBatchRequest { ApiVersion = "v1.0" };
-        var method = typeof(InvokeMgxBatchRequest).GetMethod("NormalizeToRelativeUrl",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-        var url = (string)method!.Invoke(cmdlet, ["https://graph.microsoft.com/v1.0/users/123"]);
-
+        var url = InvokeMethod<string>(cmdlet, "NormalizeToRelativeUrl", "https://graph.microsoft.com/v1.0/users/123");
         Assert.Equal("/users/123", url);
     }
 
@@ -110,11 +113,7 @@ public class InvokeMgxBatchRequestTests
     public void NormalizeToRelativeUrl_HandlesRelativeUrl()
     {
         var cmdlet = new InvokeMgxBatchRequest { ApiVersion = "v1.0" };
-        var method = typeof(InvokeMgxBatchRequest).GetMethod("NormalizeToRelativeUrl",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-        var url = (string)method!.Invoke(cmdlet, ["/users/123"]);
-
+        var url = InvokeMethod<string>(cmdlet, "NormalizeToRelativeUrl", "/users/123");
         Assert.Equal("/users/123", url);
     }
 
@@ -122,11 +121,7 @@ public class InvokeMgxBatchRequestTests
     public void NormalizeToRelativeUrl_HandlesBetaUrl()
     {
         var cmdlet = new InvokeMgxBatchRequest { ApiVersion = "beta" };
-        var method = typeof(InvokeMgxBatchRequest).GetMethod("NormalizeToRelativeUrl",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-        var url = (string)method!.Invoke(cmdlet, ["https://graph.microsoft.com/beta/groups/123"]);
-
+        var url = InvokeMethod<string>(cmdlet, "NormalizeToRelativeUrl", "https://graph.microsoft.com/beta/groups/123");
         Assert.Equal("/groups/123", url);
     }
 
@@ -148,12 +143,9 @@ public class InvokeMgxBatchRequestTests
     public void RedactSensitiveFields_RedactsClientSecret()
     {
         var cmdlet = new InvokeMgxBatchRequest();
-        var method = typeof(InvokeMgxBatchRequest).GetMethod("RedactSensitiveFields",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-
         var json = JsonNode.Parse("""{"clientSecret":"secret","appPassword":"secret"}""");
         var obj = json!.AsObject();
-        method.Invoke(null, [json]);
+        InvokeMethod<object>(cmdlet, "RedactSensitiveFields", json);
 
         Assert.Equal("***REDACTED***", obj["clientSecret"]!.GetValue<string>());
         Assert.Equal("***REDACTED***", obj["appPassword"]!.GetValue<string>());

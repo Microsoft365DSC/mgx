@@ -94,7 +94,8 @@ public class AlcInitializerCoverageTests
     {
         var thisAssembly = typeof(AlcInitializer).Assembly;
         var loadedName = thisAssembly.GetName();
-        var name = new AssemblyName($"{loadedName.Name}, Version={loadedName.Version.Major}.{Math.Max(0, loadedName.Version.Minor - 1)}.0.0");
+        var version = loadedName.Version!;
+        var name = new AssemblyName($"{loadedName.Name}, Version={version.Major}.{Math.Max(0, version.Minor - 1)}.0.0");
         
         var result = AlcInitializer.ResolveDependency(AssemblyLoadContext.Default, name);
         
@@ -106,7 +107,7 @@ public class AlcInitializerCoverageTests
     {
         var thisAssembly = typeof(AlcInitializer).Assembly;
         var loadedName = thisAssembly.GetName();
-        var name = new AssemblyName(loadedName.Name) { Version = null };
+        var name = new AssemblyName(loadedName.Name ?? string.Empty) { Version = null };
         
         var result = AlcInitializer.ResolveDependency(AssemblyLoadContext.Default, name);
         

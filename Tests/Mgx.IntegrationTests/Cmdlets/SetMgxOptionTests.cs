@@ -5,12 +5,14 @@ using Mgx.Cmdlets.Base;
 using Mgx.Engine.Http;
 using Mgx.IntegrationTests.Fakes;
 using Mgx.IntegrationTests.Infrastructure;
+using Mgx.IntegrationTests.Engine;
 
 namespace Mgx.IntegrationTests.Cmdlets;
 
 /// <summary>
 /// Tests for Set-MgxOption cmdlet.
 /// </summary>
+[Collection(ResilienceCollection.Name)]
 public class SetMgxOptionTests
 {
     private void ResetOptions()

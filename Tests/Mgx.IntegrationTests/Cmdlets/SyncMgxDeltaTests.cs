@@ -14,7 +14,14 @@ namespace Mgx.IntegrationTests.Cmdlets;
 /// </summary>
 public class SyncMgxDeltaTests
 {
-    private static GraphCollectionResponse<JsonElement> CreateDeltaPage(params (string id, string deltaLink)[] items)
+    // Use reflection to test private methods - cast to non-nullable since we control the test setup
+    private static T InvokeMethod<T>(Type type, string methodName, params object?[] parameters)
+    {
+        var method = type.GetMethod(methodName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        var result = method!.Invoke(null, parameters);
+        return (T)result!;
+    }
+    private static GraphCollectionResponse<JsonElement> CreateDeltaPage(params (string id, string? deltaLink)[] items)
     {
         var value = new List<JsonElement>();
         foreach (var item in items)
@@ -100,22 +107,14 @@ public class SyncMgxDeltaTests
     [Fact]
     public void NormalizeSelect_DeduplicatesAndSorts()
     {
-        var method = typeof(SyncMgxDelta).GetMethod("NormalizeSelect",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-
-        var result = (string)method!.Invoke(null, ["displayName,id,displayName,Id"]);
-
+        var result = InvokeMethod<string>(typeof(SyncMgxDelta), "NormalizeSelect", "displayName,id,displayName,Id");
         Assert.Equal("displayName,id", result);
     }
 
     [Fact]
     public void NormalizeSelect_TrimsWhitespace()
     {
-        var method = typeof(SyncMgxDelta).GetMethod("NormalizeSelect",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-
-        var result = (string)method!.Invoke(null, [" id , displayName "]);
-
+        var result = InvokeMethod<string>(typeof(SyncMgxDelta), "NormalizeSelect", " id , displayName ");
         Assert.Equal("displayName,id", result);
     }
 
