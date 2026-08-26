@@ -10,6 +10,7 @@
 - Updated `Testcontainers` to `4.14.0` to fix warning about old and vulnerable `SSH.NET` dependency package, while here update empty constructor `ContainerBuilder()`, which now is obsolete, to `ContainerBuilder(Image)`.
 - Updated `Wiremock` docker image to `3.13.2`
 - Changed method `ResolveDependency`, from class `AlcInitializer`, from `private` to `internal` for testability
+- Added several new tests to increase code coverage
 
 ## 2.0.4
 
