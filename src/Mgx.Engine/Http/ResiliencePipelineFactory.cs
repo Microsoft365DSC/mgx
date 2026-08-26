@@ -23,7 +23,7 @@ public static class ResiliencePipelineFactory
 
     /// <summary>
     /// Property key for passing idempotency info into the Polly retry predicate.
-    /// POST is the only non-idempotent Graph method; it only retries on 429.
+    /// POST is the only non-idempotent Graph method. It only retries on 429.
     /// </summary>
     internal static readonly ResiliencePropertyKey<bool> IsIdempotentKey = new("IsIdempotent");
 
@@ -48,10 +48,11 @@ public static class ResiliencePipelineFactory
             if (s_pipeline != null && ReferenceEquals(s_cachedOptions, options))
                 return (s_pipeline, s_rateLimiter);
 
-            // Schedule delayed disposal of the old rate limiter. It may still be
-            // referenced by in-flight ResilientGraphClient instances, so we wait
-            // TotalTimeoutSeconds to ensure all in-flight requests have completed.
-            ScheduleDelayedDispose(s_rateLimiter, options.TotalTimeoutSeconds);
+            // Not disposed. Every ResilientGraphClient already built from it holds the limiter
+            // as a readonly field, as does the handler Enable-MgxResilience injects into the SDK,
+            // and that handler is not rebuilt when options change. No request-based delay bounds
+            // that, since a client may hold its limiter for a multi-hour export. Dropping the
+            // reference is enough, the limiter owns no unmanaged handle
 
             TokenBucketRateLimiter? rateLimiter = null;
             if (!options.NoRateLimit)
@@ -71,6 +72,10 @@ public static class ResiliencePipelineFactory
             s_rateLimiter = rateLimiter;
             s_cachedOptions = options;
 
+            // Every client build passes through here, so pacing configuration applied here
+            // reaches the pacer on the next invocation
+            AdaptiveRequestPacer.Configure(options);
+
             return (s_pipeline, rateLimiter);
         }
     }
@@ -84,11 +89,14 @@ public static class ResiliencePipelineFactory
         lock (s_lock)
         {
             s_pipeline = null;
-            // Dispose after delay: in-flight clients may still reference the old limiter.
-            // Default 300s covers the maximum total timeout window.
-            ScheduleDelayedDispose(s_rateLimiter, s_cachedOptions?.TotalTimeoutSeconds ?? 300);
+            // Not disposed, for the reason documented in GetOrCreate
             s_rateLimiter = null;
             s_cachedOptions = null;
+            // Learned pacing state describes the old tenant, so clear it with the breaker history
+            AdaptiveRequestPacer.Reset();
+            // GraphBatchClient keeps its own AIMD state in separate statics, so it has to be
+            // cleared too or a fresh credential starts at the previous tenant learned rate
+            GraphBatchClient.ResetPacingState();
         }
     }
 
@@ -98,21 +106,12 @@ public static class ResiliencePipelineFactory
     /// cause ObjectDisposedException in in-flight clients, so we wait for the total
     /// timeout window to expire before disposing.
     /// </summary>
-    private static void ScheduleDelayedDispose(TokenBucketRateLimiter? limiter, int delaySeconds)
-    {
-        if (limiter == null) return;
-        _ = Task.Delay(TimeSpan.FromSeconds(delaySeconds)).ContinueWith(_ =>
-        {
-            try { limiter.Dispose(); } catch { /* best-effort cleanup */ }
-        }, TaskScheduler.Default);
-    }
 
     private static ResiliencePipeline<HttpResponseMessage> BuildPipeline(ResilientGraphClientOptions options)
     {
         var maxRetryAfterCap = options.MaxRetryAfterSeconds;
 
         return new ResiliencePipelineBuilder<HttpResponseMessage>()
-            // Total timeout
             .AddTimeout(TimeSpan.FromSeconds(options.TotalTimeoutSeconds))
             // Retry
             .AddRetry(new RetryStrategyOptions<HttpResponseMessage>
@@ -124,12 +123,12 @@ public static class ResiliencePipelineFactory
                 MaxDelay = TimeSpan.FromSeconds(maxRetryAfterCap),
                 ShouldHandle = args =>
                 {
-                    // 429 is safe to retry for all methods including POST (matches Kiota SDK behavior)
+                    // 429 is safe to retry for every method, including POST
                     if (args.Outcome.Result?.StatusCode == (HttpStatusCode)429)
                         return ValueTask.FromResult(true);
 
-                    // For non-idempotent methods (POST), only retry 429.
-                    // 500/502/503/504 may mean the request was partially processed.
+                    // Non-idempotent methods retry only on 429, since a 5xx may mean the request
+                    // was partially processed
                     var isIdempotent = args.Context.Properties.GetValue(IsIdempotentKey, true);
                     if (!isIdempotent)
                         return ValueTask.FromResult(false);
@@ -144,19 +143,15 @@ public static class ResiliencePipelineFactory
                     if (args.Outcome.Exception is HttpRequestException)
                         return ValueTask.FromResult(true);
 
-                    // Retry TaskCanceledException only if NOT caused by user cancellation (Ctrl+C).
-                    // Polly's attempt timeout throws TimeoutRejectedException (not TaskCanceledException),
-                    // so TaskCanceledException here means either user cancelled or HttpClient timeout.
+                    // The Polly attempt timeout throws TimeoutRejectedException, so a
+                    // TaskCanceledException here is either the user or the HttpClient timeout
                     if (args.Outcome.Exception is TaskCanceledException &&
                         !args.Context.CancellationToken.IsCancellationRequested)
                         return ValueTask.FromResult(true);
 
-                    // Retry when Polly's per-attempt timeout fires (idempotent methods only).
-                    // This is critical for the Enable-MgxResilience path: the SDK's internal
-                    // RetryHandler may be honoring a Retry-After delay that exceeds
-                    // AttemptTimeoutSeconds. Without this, requests fail permanently when
-                    // Graph returns Retry-After > AttemptTimeoutSeconds.
-                    // The outer TotalTimeout still bounds the overall operation.
+                    // Idempotent methods retry the per-attempt timeout, which matters under
+                    // Enable-MgxResilience where the SDK retry handler may sleep a Retry-After
+                    // longer than AttemptTimeoutSeconds. TotalTimeout still bounds the operation
                     if (args.Outcome.Exception is TimeoutRejectedException)
                         return ValueTask.FromResult(isIdempotent);
 
@@ -164,7 +159,7 @@ public static class ResiliencePipelineFactory
                 },
                 DelayGenerator = args =>
                 {
-                    // Respect Retry-After header from Graph API (429 responses)
+                    // Honor the Retry-After header
                     if (args.Outcome.Result?.Headers.RetryAfter is RetryConditionHeaderValue retryAfter)
                     {
                         if (retryAfter.Delta.HasValue)
@@ -192,6 +187,18 @@ public static class ResiliencePipelineFactory
                     var retryAfter = response?.Headers.RetryAfter;
                     var attempt = args.AttemptNumber;
                     var retryDelay = args.RetryDelay;
+
+                    // Feed the pacer BEFORE the response is disposed below - the request URI
+                    // and Retry-After are unreadable afterwards. Retried 429s never reach the
+                    // SendAsync success path, so this is the only place they are observed.
+                    if (status == (HttpStatusCode)429)
+                    {
+                        TimeSpan? serverDelay = retryAfter?.Delta
+                            ?? (retryAfter?.Date is { } date ? date - DateTimeOffset.UtcNow : null);
+                        AdaptiveRequestPacer.RecordThrottle(
+                            AdaptivePacing.Classify(response?.RequestMessage?.RequestUri?.ToString()),
+                            serverDelay);
+                    }
 
                     // Dispose the previous response to drain the connection back to the pool.
                     // With HttpCompletionOption.ResponseHeadersRead, the body stream stays open

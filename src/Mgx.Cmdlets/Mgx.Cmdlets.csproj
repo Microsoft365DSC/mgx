@@ -24,8 +24,9 @@
     <ProjectReference Include="..\Mgx.Engine\Mgx.Engine.csproj" />
   </ItemGroup>
 
-  <!-- Post-build: auto-stage DLLs into module/ so IDE builds are never stale -->
-  <Target Name="StageModuleOutput" AfterTargets="Build">
+  <!-- Stage DLLs into the module folder so IDE builds are never stale. Release only, a Debug
+       dotnet test would otherwise overwrite a Release-staged module -->
+  <Target Name="StageModuleOutput" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
       <ModuleRoot>$(MSBuildThisFileDirectory)..\..\Modules\M365DSC.mgx</ModuleRoot>
       <DepsDir>$(ModuleRoot)\Dependencies</DepsDir>

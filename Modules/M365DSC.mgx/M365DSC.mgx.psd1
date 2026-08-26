@@ -1,6 +1,6 @@
 @{
     RootModule        = 'M365DSC.mgx.psm1'
-    ModuleVersion     = '2.0.4'
+    ModuleVersion     = '2.1.0'
     GUID              = 'f978315f-75c0-48f5-b929-ca7a7757d1d2'
     Author            = 'Thomas Maillo Grome, Fabien Tschanz'
     CompanyName       = 'Mgx'
@@ -36,6 +36,7 @@
         'Get-MgxResilience'
         'Get-MgxTelemetry'
         'Sync-MgxDelta'
+        'Get-MgxContent'
     )
 
     FunctionsToExport = @()
@@ -48,10 +49,14 @@
             LicenseUri   = 'https://github.com/Microsoft365DSC/mgx/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/Microsoft365DSC/mgx'
             ReleaseNotes = @'
-v2.0.4
-- Fixed `Remove-Module M365DSC.mgx` failing and leaving the module permanently loaded. Only triggered when no Graph request had run in the session.
-- CA1416 is now a build error, keeping Windows-only APIs out of the cross-platform code paths.
-- Internal: cmdlet lifecycle and JSON conversion moved to a new `MgxCmdletCore` base class. No change to the cmdlet surface.
+v2.1.0
+- Added Get-MgxContent, downloading file and media content whole or by byte range.
+- Added adaptive request pacing, on by default, spacing requests per workload ahead of the token bucket. Opt out with Set-MgxOption -NoAdaptivePacing.
+- Added Sync-MgxDelta -CheckpointPath, -Latest and -Prefer, with drive delta support and crash resume.
+- Fixed -Top being discarded when combined with -All.
+- Fixed enumeration returning a partial collection without error when a nextLink was refused.
+- Fixed -Debug writing pre-authenticated download URLs verbatim.
+- Merged upstream gromedev/mgx 2.1.1.
 '@
         }
     }

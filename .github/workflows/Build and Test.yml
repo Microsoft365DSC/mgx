@@ -28,6 +28,11 @@ jobs:
       - name: Restore Dependencies
         run: dotnet restore Mgx.slnx
 
+      # build.ps1 regenerates the compiled help and fails when platyPS is missing.
+      - name: Install platyPS
+        shell: pwsh
+        run: Install-PSResource -Name platyPS -Scope AllUsers -TrustRepository
+
       # Stages the module into Modules/M365DSC.mgx, which the Pester tests below run against.
       - name: Build Module
         shell: pwsh
@@ -35,10 +40,10 @@ jobs:
 
       - name: Run xUnit Tests
         run: >
-          dotnet test Tests/Mgx.IntegrationTests/Mgx.IntegrationTests.csproj
+          dotnet test tests/Mgx.IntegrationTests/Mgx.IntegrationTests.csproj
           --configuration Release
           --no-build
-          --settings Tests/coverlet.runsettings
+          --settings tests/coverlet.runsettings
           --collect:"XPlat Code Coverage"
           --logger "trx;LogFileName=Mgx.IntegrationTests.trx"
           --results-directory TestResults/windows
@@ -54,7 +59,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path TestResults/windows | Out-Null
-          Import-Module './Tests/TestHarness.psm1' -Force
+          Import-Module './tests/TestHarness.psm1' -Force
 
           $results = Invoke-TestHarness -IgnoreCodeCoverage
 
@@ -120,9 +125,9 @@ jobs:
 
       - name: Run E2E Tests
         run: >
-          dotnet test Tests/Mgx.E2ETests/Mgx.E2ETests.csproj
+          dotnet test tests/Mgx.E2ETests/Mgx.E2ETests.csproj
           --configuration Release
-          --settings Tests/coverlet.runsettings
+          --settings tests/coverlet.runsettings
           --collect:"XPlat Code Coverage"
           --logger "trx;LogFileName=Mgx.E2ETests.trx"
           --results-directory TestResults/linux

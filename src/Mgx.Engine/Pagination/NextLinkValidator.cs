@@ -36,4 +36,30 @@ public static class NextLinkValidator
 
         return nextLink;
     }
+
+    /// <summary>
+    /// Validates a nextLink the service sent, throwing if it is refused. Use this
+    /// mid-pagination, where a null from <see cref="Validate"/> cannot tell "no link" from
+    /// "link refused" and the second would end the loop with a partial collection that looks
+    /// complete. Returns null only at the genuine end of the collection.
+    /// </summary>
+    public static string? ValidateOrThrow(string? nextLink, Uri? expectedHost, string? expectedPathPrefix = null)
+    {
+        if (nextLink == null) return null;
+
+        var validated = Validate(nextLink, expectedHost, expectedPathPrefix);
+        if (validated == null)
+            throw new InvalidOperationException(
+                $"Pagination stopped: the service returned an @odata.nextLink that failed validation " +
+                $"({Describe(nextLink)}). Expected an https link on '{expectedHost?.Authority}'. " +
+                "Following it could send the access token to another host, and ignoring it would " +
+                "return part of the collection as though it were all of it.");
+
+        return validated;
+    }
+
+    private static string Describe(string link) =>
+        Uri.TryCreate(link, UriKind.Absolute, out var u)
+            ? $"{u.Scheme}://{u.Authority}{u.AbsolutePath}"
+            : "unparseable";
 }

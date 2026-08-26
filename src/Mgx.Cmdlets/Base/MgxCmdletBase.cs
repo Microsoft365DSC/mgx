@@ -1,8 +1,8 @@
 using System.Collections;
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Management.Automation;
 using System.Net;
-using System.Globalization;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -15,7 +15,7 @@ namespace Mgx.Cmdlets.Base;
 /// <summary>
 /// Lightweight base class for Mgx cmdlets that need Graph client access.
 /// Provides auth and client lifecycle on top of <see cref="MgxCmdletCore"/>,
-/// which supplies cancellation, disposal, and JSON-to-Hashtable conversion.
+/// which supplies cancellation, disposal, and JSON-to-PSObject conversion.
 /// Used by Invoke-MgxRequest and Invoke-MgxBatchRequest.
 /// </summary>
 public abstract class MgxCmdletBase : MgxCmdletCore
@@ -26,11 +26,10 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     private static HttpClient? s_graphHttpClient;
     private static bool s_ownsHttpClient; // false when using SDK fallback (don't dispose SDK's client)
 
-    // Identity the cached client was built for
     private static volatile string? s_cachedAuthFingerprint;
 
-    // WeakReference so a disconnected AuthContext (and the X509Certificate2 it holds) is not
-    // kept alive by Mgx. A collected target can never be the current context.
+    // WeakReference so a disconnected AuthContext, and the certificate it holds, is not kept
+    // alive by Mgx. A collected target can never be the current context
     private static volatile WeakReference<object>? s_cachedAuthContextRef;
 
     // TotalTimeoutSeconds the cached client's HttpClient.Timeout was derived from.
@@ -40,9 +39,8 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     internal static volatile ResilientGraphClientOptions s_clientOptions = ResilientGraphClientOptions.Default;
 
     /// <summary>
-    /// Test-only transport override. When set, <see cref="GetClient"/> builds on the supplied
-    /// HttpClient and skips auth discovery, the Graph SDK reflection path and endpoint detection.
-    /// Shipping code never assigns it.
+    /// Test-only transport override. When set, GetClient builds on the supplied HttpClient and
+    /// skips auth discovery, the Graph SDK reflection path and endpoint detection.
     /// </summary>
     internal static volatile Func<HttpClient>? s_testTransportFactory;
 
@@ -62,8 +60,8 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     {
         if (_client != null) return _client;
 
-        // Sits ahead of the auth check because with no Graph SDK in the process the fingerprint
-        // is empty and the cmdlet would terminate before reaching any HTTP work.
+        // Ahead of the auth check, since with no Graph SDK in the process the fingerprint is
+        // empty and the cmdlet would terminate before reaching any HTTP work
         var testTransport = s_testTransportFactory;
         if (testTransport != null)
             return _client = ConfigureClient(testTransport(), s_clientOptions);
@@ -71,17 +69,27 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         var identity = GetCurrentAuthIdentity(WriteVerbose);
         if (string.IsNullOrEmpty(identity.Fingerprint))
         {
+            // Microsoft.Graph.Authentication is a soft dependency, so an empty fingerprint has two
+            // causes needing different advice: the module is absent, or it is present but
+            // disconnected
+            var (message, errorId) = IsGraphAuthLoaded()
+                ? ("Not connected to Microsoft Graph. Run Connect-MgGraph first.",
+                   "NotConnected")
+                : ("Microsoft.Graph.Authentication is not loaded. Install it "
+                   + "(Install-PSResource -Name Microsoft.Graph.Authentication) and run "
+                   + "Connect-MgGraph, or supply your own transport via Enable-MgxResilience.",
+                   "GraphAuthModuleNotLoaded");
+
             ThrowTerminatingError(new ErrorRecord(
-                new InvalidOperationException("Not connected to Microsoft Graph. Run Connect-MgGraph first."),
-                "NotConnected",
+                new InvalidOperationException(message),
+                errorId,
                 ErrorCategory.ConnectionError,
                 null));
             return null!;
         }
 
-        // Lock protects concurrent runspaces from racing on static client/endpoint init.
-        // Capture locals inside lock to prevent TOCTOU race: another thread could enter
-        // the lock and replace/dispose s_graphHttpClient between lock exit and usage.
+        // Locals are captured inside the lock, or another runspace could replace
+        // s_graphHttpClient between lock exit and use
         HttpClient httpClient;
         var identityChanged = false;
         var clientOptions = s_clientOptions;
@@ -92,8 +100,8 @@ public abstract class MgxCmdletBase : MgxCmdletCore
                 previousFingerprint, identity.Fingerprint, StringComparison.Ordinal);
             var contextReplaced = AuthContextInstanceChanged(identity.AuthContext);
 
-            // A client borrowed from the SDK goes stale on its own terms, e.g. after Connect-MgGraph swaps
-            // GraphSession.GraphHttpClient, and the instance we cached still carries the old auth.
+            // A borrowed SDK client goes stale when Connect-MgGraph swaps
+            // GraphSession.GraphHttpClient and the cached instance still carries the old auth
             var sessionClient = s_ownsHttpClient ? null : TryGetSessionGraphHttpClient();
             var borrowedClientStale = sessionClient != null && s_graphHttpClient != null
                 && !ReferenceEquals(s_graphHttpClient, sessionClient);
@@ -120,16 +128,11 @@ public abstract class MgxCmdletBase : MgxCmdletCore
                         + $"{Shorten(identity.Fingerprint)}). Rebuilding the Mgx HTTP client.");
                 }
 
-                // Reset-before-Build is intentional here (unlike TryPreInitHttpClient which
-                // builds first then resets). GetClient() has a fallback path (SDK client), so
-                // resetting circuit breaker state from the old tenant before attempting to build
-                // is safe: if BuildCleanHttpClient fails, GetSdkHttpClientFallback provides a
-                // working client. If both fail, ThrowTerminatingError is the correct response.
-                // Only on a real credential change: a same-identity reconnect should keep its
-                // warm rate limiter instead of earning a fresh burst allowance.
+                // Resetting before the build is safe because GetClient falls back to the SDK
+                // client. Only on a real credential change, so a same-identity reconnect keeps
+                // its warm rate limiter instead of earning a fresh burst allowance
                 if (credentialChanged) ResiliencePipelineFactory.Reset();
-                // Schedule delayed disposal: in-flight ResilientGraphClient instances
-                // may still hold a reference to the old client via their constructor
+                // In-flight ResilientGraphClient instances may still reference the old client
                 ScheduleDelayedHttpClientDispose(s_graphHttpClient, s_ownsHttpClient);
                 s_graphHttpClient = BuildCleanHttpClient(clientOptions.TotalTimeoutSeconds);
                 if (s_graphHttpClient != null)
@@ -164,19 +167,14 @@ public abstract class MgxCmdletBase : MgxCmdletCore
             httpClient = s_graphHttpClient!;
         }
 
-        // Outside s_initLock by design. Enable-MgxResilience takes StateLock and then s_initLock
-        // (via TryPreInitHttpClient), so taking StateLock while holding s_initLock inverts the
-        // lock order and can deadlock. Never acquire StateLock inside s_initLock.
+        // Outside s_initLock. Enable-MgxResilience takes StateLock then s_initLock, so taking
+        // StateLock here would invert the lock order and can deadlock
         if (identityChanged)
             Cmdlets.Configuration.EnableMgxResilience.RefreshInjectedClient(WriteWarning, WriteVerbose);
 
         return _client = ConfigureClient(httpClient, clientOptions);
     }
 
-    /// <summary>
-    /// Wraps an HttpClient in a <see cref="ResilientGraphClient"/> wired to this cmdlet's output
-    /// streams. Shared by the production and test transport paths so both are wired identically.
-    /// </summary>
     private ResilientGraphClient ConfigureClient(HttpClient httpClient, ResilientGraphClientOptions options)
     {
         var client = new ResilientGraphClient(httpClient, options)
@@ -216,7 +214,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
             verbose?.Invoke($"Failed to read GraphSession.AuthContext: {ex.Message}");
         }
 
-        // Fallback for SDK internals drift using Get-MgContext
         try
         {
             using var ps = PowerShell.Create(RunspaceMode.CurrentRunspace);
@@ -235,11 +232,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         }
     }
 
-    /// <summary>
-    /// True when the live AuthContext is a different object than the one the cached client was
-    /// built from. Connect-MgGraph replaces the object, so this catches identity changes the
-    /// value fingerprint cannot see (a rotated ClientSecret above all).
-    /// </summary>
     private static bool AuthContextInstanceChanged(object? current)
     {
         var cachedRef = s_cachedAuthContextRef;
@@ -254,9 +246,7 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         "CertificateThumbprint", "CertificateSubjectName", "SendCertificateChain", "WamEnabled"
     ];
 
-    /// <summary>
-    /// Builds a comparable fingerprint of the effective Graph identity.
-    /// </summary>
+    /// <summary>Builds a comparable fingerprint of the effective Graph identity.</summary>
     internal static string BuildAuthFingerprint(object? authContext, string? graphEndpoint)
     {
         if (authContext == null) return string.Empty;
@@ -284,9 +274,7 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     private static void AppendField(StringBuilder sb, string value) =>
         sb.Append(FieldSeparator).Append(value.Length).Append(':').Append(value);
 
-    /// <summary>
-    /// Reads a named member off an AuthContext-shaped object.
-    /// </summary>
+    /// <summary>Reads a named member off an AuthContext-shaped object.</summary>
     internal static object? ReadAuthMember(object? source, string name)
     {
         if (source == null) return null;
@@ -312,6 +300,34 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         var graphSessionType = FindType("Microsoft.Graph.PowerShell.Authentication.GraphSession");
         return graphSessionType?.GetProperty("Instance",
             BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
+    }
+
+    /// <summary>
+    /// Whether Microsoft.Graph.Authentication is present in the session. It is a soft dependency,
+    /// so absent has to be told apart from present but disconnected.
+    /// <para>
+    /// Checks the type first, then Get-MgContext, since the module can be loaded even when
+    /// GraphSession is not where we look.
+    /// </para>
+    /// </summary>
+    internal static bool IsGraphAuthLoaded()
+    {
+        if (FindType("Microsoft.Graph.PowerShell.Authentication.GraphSession") != null)
+            return true;
+
+        try
+        {
+            using var ps = PowerShell.Create(RunspaceMode.CurrentRunspace);
+            ps.AddCommand("Get-Command")
+              .AddParameter("Name", "Get-MgContext")
+              .AddParameter("ErrorAction", "SilentlyContinue");
+            return ps.Invoke().Count > 0;
+        }
+        catch
+        {
+            // No runspace (hosted/test process) means no module either.
+            return false;
+        }
     }
 
     /// <summary>
@@ -353,13 +369,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         }
     }
 
-    /// <summary>
-    /// Builds an auth-only HttpClient using MSAL's AuthenticationHandler from the Graph SDK.
-    /// Token lifecycle: MSAL's AuthenticationHandler refreshes tokens proactively
-    /// (5 min before expiry). For operations spanning 2+ hours, token refresh is
-    /// transparent as long as the Connect-MgGraph session remains valid and the
-    /// refresh token has not been revoked.
-    /// </summary>
     private HttpClient? BuildCleanHttpClient(int totalTimeoutSeconds) =>
         BuildCleanHttpClient(WriteWarning, WriteVerbose, totalTimeoutSeconds);
 
@@ -374,18 +383,14 @@ public abstract class MgxCmdletBase : MgxCmdletCore
             var authContext = instance.GetType().GetProperty("AuthContext")?.GetValue(instance);
             if (authContext == null) return null;
 
-            // Save AzureADEndpoint before GetAuthenticationProviderAsync. A prior SDK call
-            // (Connect-MgGraph or Invoke-MgGraphRequest) may have replaced GraphSession.Environment
-            // with a new object that has empty AzureADEndpoint. Restore it before calling MSAL.
+            // A prior SDK call may have replaced GraphSession.Environment with one whose
+            // AzureADEndpoint is empty, so save and restore it around the MSAL call
             var envObj = instance.GetType().GetProperty("Environment")?.GetValue(instance);
             var savedAadEndpoint = envObj?.GetType().GetProperty("AzureADEndpoint")?.GetValue(envObj)?.ToString();
             if (string.IsNullOrEmpty(savedAadEndpoint))
             {
-                // AzureADEndpoint already corrupted (a prior Invoke-MgGraphRequest set it to empty).
-                // Try to recover the base AAD host from AuthContext.Authority first.
-                // AuthContext.Authority is computed as AzureADEndpoint + "/" + tenantId - so when
-                // AzureADEndpoint was already empty at the time of computation, Authority is a
-                // relative path like "/tenantId" and cannot be parsed as an absolute URI.
+                // AzureADEndpoint is already empty. Authority is AzureADEndpoint plus the tenant
+                // id, so it is only usable here when it parses as an absolute URI
                 var aadEndpoint = authContext.GetType().GetProperty("Authority")?.GetValue(authContext)?.ToString();
                 var aadProp = envObj?.GetType().GetProperty("AzureADEndpoint");
                 if (aadProp?.CanWrite == true)
@@ -400,9 +405,8 @@ public abstract class MgxCmdletBase : MgxCmdletCore
                     }
                     else
                     {
-                        // Both AzureADEndpoint and AuthContext.Authority are corrupted.
-                        // Infer the correct AAD base from GraphEndpoint (sovereign cloud mapping),
-                        // falling back to global AAD for unknown or missing endpoints.
+                        // Neither is usable, so infer the AAD base from GraphEndpoint and fall
+                        // back to global AAD
                         var graphEndpoint = envObj?.GetType().GetProperty("GraphEndpoint")?.GetValue(envObj)?.ToString();
                         baseAuthority = graphEndpoint switch
                         {
@@ -463,11 +467,9 @@ public abstract class MgxCmdletBase : MgxCmdletCore
             {
                 DefaultRequestVersion = HttpVersion.Version20,
                 DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
-                // Set HttpClient timeout as a safety net above Polly's TotalTimeoutSeconds.
-                // Polly handles all normal timeout semantics. This outer timeout catches
-                // edge cases where a connection bypasses Polly (pool exhaustion, DNS hang,
-                // stale TLS). Set above Polly's TotalTimeoutSeconds so Polly fires first;
-                // 60s of headroom prevents HttpClient from cancelling before Polly can react.
+                // A safety net above the Polly total timeout, catching connections that bypass
+                // Polly such as pool exhaustion, a DNS hang or stale TLS. The headroom keeps
+                // Polly firing first
                 Timeout = TimeSpan.FromSeconds(totalTimeoutSeconds + 60)
             };
         }
@@ -479,12 +481,8 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     }
 
     /// <summary>
-    /// Pre-initializes Mgx's static HTTP client before any SDK probe runs.
-    /// Called by Enable-MgxResilience before ForceInitializeAndGetClient as a
-    /// performance optimization: builds the clean client while AzureADEndpoint
-    /// is still intact, avoiding the save/restore overhead on subsequent calls.
-    /// The root cause fix (RestoreAzureADEndpoint in ForceInitializeAndGetClient)
-    /// handles the auth poisoning; this method is a belt-and-suspenders optimization.
+    /// Pre-initializes the static HTTP client before any SDK probe runs. Building it while
+    /// AzureADEndpoint is still intact avoids the save and restore overhead on later calls.
     /// </summary>
     internal static void TryPreInitHttpClient(Action<string> warn, Action<string> verbose)
     {
@@ -493,18 +491,14 @@ public abstract class MgxCmdletBase : MgxCmdletCore
 
         var options = s_clientOptions;
 
-        // Quick early exit on the hot path (idempotent Enable calls).
-        // Volatile.Read ensures ARM64 memory visibility - without it, non-volatile statics
-        // read outside a lock have no acquire barrier and may return stale values.
+        // Volatile.Read gives the acquire barrier a non-volatile static read outside a lock
+        // lacks, which matters on ARM64
         if (Volatile.Read(ref s_graphHttpClient) != null && !ClientIsStale(identity, options)) return;
 
         lock (s_initLock)
         {
             if (s_graphHttpClient != null && !ClientIsStale(identity, options)) return;
 
-            // Build first. Only dispose/reset after we have a confirmed replacement.
-            // If BuildCleanHttpClient fails, the existing s_graphHttpClient must remain valid
-            // and callers fall back via GetClient() on first use.
             var client = BuildCleanHttpClient(warn, verbose, options.TotalTimeoutSeconds);
             if (client == null) return; // BuildCleanHttpClient already warned with ex.Message
 
@@ -521,10 +515,6 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         }
     }
 
-    /// <summary>
-    /// True when the cached client no longer matches the given identity (by either signal) or
-    /// the timeout it was built with. Callers must hold s_initLock, or accept a benign rebuild.
-    /// </summary>
     private static bool ClientIsStale(AuthIdentity identity, ResilientGraphClientOptions options) =>
         !string.Equals(s_cachedAuthFingerprint, identity.Fingerprint, StringComparison.Ordinal)
         || AuthContextInstanceChanged(identity.AuthContext)
@@ -541,13 +531,9 @@ public abstract class MgxCmdletBase : MgxCmdletCore
                 ?.GetValue(instance) as HttpClient;
             if (httpClient != null) return httpClient;
 
-            // Use detected endpoint instead of hardcoded graph.microsoft.com
-            // (supports sovereign clouds: GCC-High, DoD, China)
             var endpoint = GetGraphEndpoint(WriteWarning, WriteVerbose) ?? "https://graph.microsoft.com";
 
-            // Save AzureADEndpoint before probe (same issue as ForceInitializeAndGetClient:
-            // Invoke-MgGraphRequest replaces GraphSession.Environment with a new object
-            // that has empty AzureADEndpoint, breaking GetAuthenticationProviderAsync).
+            // Same AzureADEndpoint save and restore as ForceInitializeAndGetClient
             var envObj = instance.GetType().GetProperty("Environment")?.GetValue(instance);
             var savedAadEndpoint = envObj?.GetType().GetProperty("AzureADEndpoint")?.GetValue(envObj)?.ToString();
 
@@ -594,10 +580,8 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         }
     }
 
-    // Cache for FindType: avoids scanning all loaded assemblies on every call.
-    // ConcurrentDictionary is safe for concurrent runspaces.
-    // Only non-null results are cached: assemblies load lazily in PowerShell,
-    // so a miss now may succeed after the user imports additional modules.
+    // Avoids scanning every loaded assembly per call. Only non-null results are cached, since
+    // a miss now may succeed once the user imports another module
     private static readonly ConcurrentDictionary<string, Type> s_typeCache = new();
 
     static MgxCmdletBase()
@@ -605,12 +589,9 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         AppDomain.CurrentDomain.AssemblyLoad += OnAssemblyLoad;
     }
 
-    // A cached Type carries the identity of the assembly that defined it. Re-importing
-    // Microsoft.Graph.Authentication - a different version, or into a fresh load context -
-    // produces a second GraphSession type whose Instance is a different singleton, so a stale
-    // entry would silently point Mgx at a session nobody else is using. Assemblies only ever
-    // appear, never disappear, so any load is the signal to re-resolve. Clearing an almost
-    // always tiny dictionary is cheaper than validating entries on the hot path.
+    // A cached Type carries its defining assembly identity, so re-importing
+    // Microsoft.Graph.Authentication would leave Mgx pointing at a GraphSession singleton
+    // nobody else uses. Any assembly load is the signal to re-resolve
     private static void OnAssemblyLoad(object? sender, AssemblyLoadEventArgs args) => s_typeCache.Clear();
 
     /// <summary>
@@ -652,17 +633,10 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         }
     }
 
-    /// <summary>
-    /// Disposes an HttpClient after a delay. In-flight ResilientGraphClient instances
-    /// may still hold a reference to the old client, so we wait for the total timeout
-    /// window to ensure all in-flight requests complete before disposing.
-    /// Same pattern as ResiliencePipelineFactory.ScheduleDelayedDispose for rate limiters.
-    /// </summary>
     private static void ScheduleDelayedHttpClientDispose(HttpClient? client, bool owned)
     {
-        // Ownership is passed in rather than read off the static. Callers replace the static
-        // right after this call, so reading it here would silently follow whichever edit lands
-        // first - and disposing a borrowed SDK client kills Invoke-MgGraphRequest session-wide.
+        // Ownership is passed in, not read off the static, because callers replace that static
+        // right after this call and disposing a borrowed SDK client would break the session
         if (client == null || !owned) return;
         var delaySeconds = s_clientOptions.TotalTimeoutSeconds;
         _ = Task.Delay(TimeSpan.FromSeconds(delaySeconds)).ContinueWith(_ =>
@@ -670,6 +644,15 @@ public abstract class MgxCmdletBase : MgxCmdletCore
             try { client.Dispose(); } catch { /* best-effort cleanup */ }
         }, TaskScheduler.Default);
     }
+
+    /// <summary>
+    /// Whether the active transport is the mgx-owned clean client (AllowAutoRedirect off)
+    /// rather than the borrowed SDK client. The content path requires ownership: the SDK
+    /// client ships a RedirectHandler that auto-follows a content 302 to a host mgx never
+    /// validated, so Get-MgxContent fails closed when this is false.
+    /// </summary>
+    // A test transport is mgx-built and follows no redirects, so the content path may use it
+    protected static bool TransportIsOwned => s_ownsHttpClient || s_testTransportFactory != null;
 
     /// <summary>
     /// Drain buffered verbose messages from the resilience pipeline.
@@ -706,29 +689,215 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         s_clientOptions = options ?? ResilientGraphClientOptions.Default;
     }
 
-    /// <summary>
-    /// Unwrap a PSObject to the .NET value underneath (string, Hashtable, ...). A
-    /// PSCustomObject is returned as its PSObject: its members live on the PSObject,
-    /// and its BaseObject is an empty PSCustomObject marker that carries nothing.
-    /// </summary>
-    protected internal static object UnwrapPSObject(object input) =>
-        input is PSObject pso && pso.BaseObject is not PSObject and not PSCustomObject
-            ? pso.BaseObject
-            : input;
+    private static bool CanTakeExclusively(string path)
+    {
+        try
+        {
+            using var _ = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>
-    /// Read a named member from pipeline input, whether it is a Hashtable (what the
-    /// Graph cmdlets emit), a PSObject-wrapped dictionary, or a PSCustomObject.
+    /// Remove leftover "{outputPath}.{guid}.tmp" files. Called only when no resume is pending,
+    /// where every such file is an orphan by definition - except one a live run still holds,
+    /// which CanTakeExclusively keeps out of reach.
     /// </summary>
-    protected internal static object? TryGetMember(object? input, string name)
+    protected void DeleteStaleTemps(string outputPath)
     {
-        if (input is PSObject wrapper && wrapper.BaseObject is IDictionary baseDict)
-            return baseDict[name];
-        if (input is IDictionary dict)
-            return dict[name];
-        if (input is PSObject pso)
-            return pso.Properties[name]?.Value;
-        return null;
+        try
+        {
+            var dir = Path.GetDirectoryName(outputPath);
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
+            foreach (var stale in Directory.EnumerateFiles(dir, Path.GetFileName(outputPath) + ".*.tmp").ToList())
+            {
+                // A second export running against the same output owns a file matching the same
+                // glob. Ask for it exclusively first, since Unix would happily unlink a file
+                // another run is still writing into
+                if (!CanTakeExclusively(stale))
+                {
+                    WriteVerbose($"Left '{Path.GetFileName(stale)}' alone: another run is writing to it.");
+                    continue;
+                }
+                try
+                {
+                    File.Delete(stale);
+                    WriteVerbose($"Deleted an orphaned temp file from an earlier interrupted run: {Path.GetFileName(stale)}");
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    WriteWarning($"Could not delete orphaned temp file '{stale}': {ex.Message}. Delete it manually.");
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best effort. A sweep failure must never stop the run
+        }
+    }
+
+    private static string? ResolveNamedTemp(string outputPath, string tempFileName, long dataLength)
+    {
+        if (dataLength <= 0) return null;
+        var dir = Path.GetDirectoryName(outputPath);
+        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return null;
+        if (!string.Equals(tempFileName, Path.GetFileName(tempFileName), StringComparison.Ordinal))
+            return null;
+        if (!IsRunTempName(Path.GetFileName(outputPath), tempFileName)) return null;
+        var tempPath = Path.Combine(dir, tempFileName);
+        if (string.Equals(Path.GetFullPath(tempPath), Path.GetFullPath(outputPath),
+                StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (!File.Exists(tempPath)) return null;
+        if (new FileInfo(tempPath).Length < dataLength) return null;
+        return tempPath;
+    }
+
+    private static bool IsRunTempName(string outputFileName, string candidate)
+    {
+        var prefix = outputFileName + ".";
+        const string suffix = ".tmp";
+        if (candidate.Length != prefix.Length + 32 + suffix.Length) return false;
+        if (!candidate.StartsWith(prefix, StringComparison.Ordinal)) return false;
+        if (!candidate.EndsWith(suffix, StringComparison.Ordinal)) return false;
+        for (var i = prefix.Length; i < prefix.Length + 32; i++)
+        {
+            if (candidate[i] is (>= '0' and <= '9') or (>= 'a' and <= 'f')) continue;
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Replace the output with the first <paramref name="dataLength"/> bytes of a named temp,
+    /// then remove the temp. Replacing rather than appending keeps a previous run rows out of
+    /// the output. Taking exactly the recorded file keeps an unrelated leftover from being
+    /// merged in, and counting bytes rather than lines cannot disagree about a torn final line.
+    /// Returns false when the temp is absent or shorter than the checkpoint promised, which
+    /// means the caller must not resume past the items it counted.
+    /// </summary>
+    protected static bool TryPromoteNamedTemp(string outputPath, string tempFileName, long dataLength)
+    {
+        try
+        {
+            var tempPath = ResolveNamedTemp(outputPath, tempFileName, dataLength);
+            if (tempPath == null) return false;
+
+            // Staged like the other forms, so the destination is replaced in one Move rather
+            // than truncated and refilled in place.
+            var adoptPath = outputPath + ".adopt";
+            using (var writer = new FileStream(adoptPath, FileMode.Create, FileAccess.Write))
+            {
+                using var temp = new FileStream(tempPath, FileMode.Open, FileAccess.Read);
+                var buffer = new byte[81920];
+                long remaining = dataLength;
+                while (remaining > 0)
+                {
+                    var read = temp.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+                    if (read <= 0) break;
+                    writer.Write(buffer, 0, read);
+                    remaining -= read;
+                }
+                if (remaining > 0)
+                {
+                    writer.Dispose();
+                    File.Delete(adoptPath);
+                    return false;
+                }
+            }
+            File.Move(adoptPath, outputPath, overwrite: true);
+            try { File.Delete(tempPath); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Cut the output back to the length a checkpoint recorded for it, dropping anything the
+    /// interrupted run wrote after its last save. Those items are re-fetched, so dropping them
+    /// is what keeps a resume from duplicating them. Returns false when the output is shorter
+    /// than recorded, which means it is no longer the file the checkpoint describes.
+    /// </summary>
+    protected static bool TryTrimOutputToCheckpoint(string outputPath, long dataLength)
+    {
+        try
+        {
+            // A checkpoint on disk is untrusted input, and SetLength rejects a negative length
+            // with an exception the catch below does not cover
+            if (dataLength < 0) return false;
+            if (!File.Exists(outputPath)) return false;
+            var actual = new FileInfo(outputPath).Length;
+            if (actual < dataLength) return false;
+            if (actual == dataLength) return true;
+            using var fs = new FileStream(outputPath, FileMode.Open, FileAccess.Write);
+            fs.SetLength(dataLength);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Recovers a fresh JSONL run interrupted before its temp was promoted, from a checkpoint
+    /// predating the recorded temp name and length. With only a line count and the newest
+    /// matching temp to go on, this is safe only when no output exists, since everything the run
+    /// wrote is then in its temp. Against an existing output there is no way to tell whose items
+    /// the temp holds and the caller must re-enumerate. Copies exactly
+    /// <paramref name="itemCount"/> lines, then removes the temp. Returns false when nothing
+    /// usable exists.
+    /// </summary>
+    protected static bool TryAdoptOrphanedTemp(string outputPath, long itemCount)
+    {
+        try
+        {
+            if (itemCount <= 0) return false;
+            if (File.Exists(outputPath)) return false;
+            var dir = Path.GetDirectoryName(outputPath);
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return false;
+            var temp = Directory.EnumerateFiles(dir, Path.GetFileName(outputPath) + ".*.tmp")
+                .Select(p => new FileInfo(p))
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .FirstOrDefault();
+            if (temp == null) return false;
+
+            // Staged so the output appears in one Move. A merge that dies halfway leaves only
+            // the staging file behind, and the caller keeps its checkpoint - the safe direction.
+            long copied = 0;
+            var adoptPath = outputPath + ".adopt";
+            using (var writer = new StreamWriter(adoptPath, append: false))
+            {
+                using var reader = new StreamReader(temp.FullName);
+                string? line;
+                while (copied < itemCount && (line = reader.ReadLine()) != null)
+                {
+                    writer.WriteLine(line);
+                    copied++;
+                }
+            }
+            if (copied < itemCount)
+            {
+                // Temp holds less than the checkpoint promises - unusable.
+                File.Delete(adoptPath);
+                return false;
+            }
+            File.Move(adoptPath, outputPath, overwrite: true);
+            temp.Delete();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     #region Shared URL and header builders
@@ -796,7 +965,7 @@ public abstract class MgxCmdletBase : MgxCmdletCore
 
         if (!string.IsNullOrEmpty(p.Search))
         {
-            // Graph API requires $search values wrapped in double quotes: $search="displayName:John"
+            // Graph requires $search values wrapped in double quotes
             var searchValue = p.Search;
             if (!searchValue.StartsWith('"') || !searchValue.EndsWith('"'))
                 searchValue = $"\"{searchValue}\"";
@@ -809,15 +978,14 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         if (p.ExpandProperty is { Length: > 0 })
             queryParams.Add($"$expand={Uri.EscapeDataString(string.Join(",", p.ExpandProperty))}");
 
-        // $count=true: required explicitly via -CountVariable, or implicitly when $search is used
-        // (Graph advanced query capabilities require $count=true alongside $search)
+        // Required by -CountVariable, and by Graph advanced queries whenever $search is used
         if (p.IncludeCount || !string.IsNullOrEmpty(p.Search))
             queryParams.Add("$count=true");
 
         if (queryParams.Count == 0)
             return baseUrl;
 
-        // If URI already contains query parameters, append with & instead of ?
+        // Append with & when the URI already carries a query
         var separator = baseUrl.Contains('?') ? "&" : "?";
         return $"{baseUrl}{separator}{string.Join("&", queryParams)}";
     }
@@ -829,13 +997,29 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         $"Wait {s_clientOptions.CircuitBreakerDurationSeconds}s or run Get-MgxTelemetry for details. " +
         $"Tune with Set-MgxOption -CircuitBreakerFailureRatio / -CircuitBreakerMinThroughput.";
 
-    protected void WriteBetaHintIfApplicable(HttpStatusCode statusCode, string apiVersion)
+    private static readonly HashSet<string> ObjectMissingCodes = new(StringComparer.OrdinalIgnoreCase)
     {
-        if (statusCode == HttpStatusCode.NotFound &&
-            string.Equals(apiVersion, "v1.0", StringComparison.OrdinalIgnoreCase))
-        {
-            WriteWarning("This endpoint may only be available in beta. Retry with -ApiVersion beta.");
-        }
+        "itemNotFound",
+    };
+
+    /// <summary>True when the exception is a Graph 404 that names a missing object.</summary>
+    protected static bool IsObjectMissing(Exception ex) =>
+        ex is GraphServiceException { StatusCode: HttpStatusCode.NotFound } g
+        && g.ErrorCode != null
+        && ObjectMissingCodes.Contains(g.ErrorCode);
+
+    protected void WriteBetaHintIfApplicable(HttpStatusCode statusCode, string apiVersion,
+        string? errorCode = null)
+    {
+        if (statusCode != HttpStatusCode.NotFound ||
+            !string.Equals(apiVersion, "v1.0", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        // A missing user, group or drive item is not an absent endpoint.
+        if (errorCode != null && ObjectMissingCodes.Contains(errorCode))
+            return;
+
+        WriteWarning("This endpoint may only be available in beta. Retry with -ApiVersion beta.");
     }
 
     protected static ErrorCategory MapStatusToCategory(HttpStatusCode statusCode) => statusCode switch
@@ -854,7 +1038,7 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     /// BrokenCircuitException, HttpRequestException) that appear in every cmdlet's
     /// catch cascade. Drains buffered messages, writes beta hint if applicable,
     /// and writes the error record.
-    /// Returns true if the exception was handled; false if unrecognized.
+    /// Returns true if the exception was handled. False if unrecognized.
     /// </summary>
     protected bool WriteGraphError(Exception ex, object? target, string? apiVersion = null)
     {
@@ -864,7 +1048,7 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         {
             case GraphServiceException gex:
                 if (apiVersion != null)
-                    WriteBetaHintIfApplicable(gex.StatusCode, apiVersion);
+                    WriteBetaHintIfApplicable(gex.StatusCode, apiVersion, gex.ErrorCode);
                 WriteError(new ErrorRecord(gex, gex.ErrorCode ?? "GraphError",
                     MapStatusToCategory(gex.StatusCode), target));
                 return true;
@@ -885,17 +1069,32 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         }
     }
 
-    // Count discrepancy detection thresholds.
-    // Not user-configurable (YAGNI). Change these constants if defaults prove problematic.
-    // 10% tolerance prevents noise from eventual consistency lag;
-    // 100-item floor avoids false alarms on small collections.
+    // Count discrepancy thresholds. Undercount is tolerant, to absorb eventual consistency lag.
+    // Overcount is much tighter, because the failure mode is a duplicated page from a skiptoken
+    // overlap that a symmetric tolerance would never catch at scale
     protected const double CountDiscrepancyThreshold = 0.9;
     protected const long CountDiscrepancyMinItems = 100;
+    protected const double CountOvershootThreshold = 0.005;
+    protected const long CountOvershootMinItems = 50;
 
     protected void WriteCountDiscrepancyWarning(
         string resource, long reportedCount, long actualCount, string? filter)
     {
         if (reportedCount < CountDiscrepancyMinItems) return;
+
+        if (actualCount > reportedCount)
+        {
+            var overshoot = actualCount - reportedCount;
+            if (overshoot <= Math.Max(CountOvershootMinItems, (long)(reportedCount * CountOvershootThreshold)))
+                return;
+            WriteWarning(
+                $"[{resource}] Graph returned {actualCount} items but reported a count of {reportedCount} "
+                + $"({overshoot} extra). This can indicate a duplicated page during pagination "
+                + "(observed as a transient service-side skiptoken overlap). If the output feeds a "
+                + "downstream system, deduplicate on 'id'.");
+            return;
+        }
+
         if (actualCount >= (long)(reportedCount * CountDiscrepancyThreshold)) return;
 
         var pct = reportedCount > 0 ? (int)((1.0 - (double)actualCount / reportedCount) * 100) : 0;

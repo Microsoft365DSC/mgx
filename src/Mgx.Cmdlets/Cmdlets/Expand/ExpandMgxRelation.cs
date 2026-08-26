@@ -24,10 +24,6 @@ namespace Mgx.Cmdlets.Cmdlets.Expand;
 [OutputType(typeof(Hashtable))]
 public class ExpandMgxRelation : MgxCmdletBase
 {
-    /// <summary>
-    /// Object to enrich. Accepts a Hashtable (what the Mgx cmdlets emit) or a PSCustomObject;
-    /// the relation is attached in the same shape the object arrived in.
-    /// </summary>
     [Parameter(Mandatory = true, ValueFromPipeline = true)]
     public object InputObject { get; set; } = null!;
 
@@ -221,7 +217,7 @@ public class ExpandMgxRelation : MgxCmdletBase
                         ? nl.GetString() : null;
                     Uri? expectedHost = System.Uri.TryCreate(url, UriKind.Absolute, out var parsed)
                         ? parsed : null;
-                    nextLink = NextLinkValidator.Validate(nextLink, expectedHost);
+                    nextLink = NextLinkValidator.ValidateOrThrow(nextLink, expectedHost);
 
                     int consecutiveEmptyPages = 0;
                     while (nextLink != null)
@@ -248,7 +244,7 @@ public class ExpandMgxRelation : MgxCmdletBase
                             break;
                         }
 
-                        nextLink = NextLinkValidator.Validate(page.NextLink, expectedHost);
+                        nextLink = NextLinkValidator.ValidateOrThrow(page.NextLink, expectedHost);
                     }
 
                     results[url] = items.ToArray();
@@ -275,16 +271,10 @@ public class ExpandMgxRelation : MgxCmdletBase
 
     }
 
-    /// <summary>
-    /// Output all buffered objects with the relation property attached.
-    /// Objects missing IdProperty or with errored IDs get null for the relation.
-    /// Preserves original pipeline order.
-    /// </summary>
     private void OutputBufferedObjects(Dictionary<string, JsonElement[]> resultsById)
     {
         // Cache converted results per ID to avoid redundant JsonToHashtable calls
         // when multiple buffer objects share the same ID
-        var convertedCache = new Dictionary<string, object?>();
         HashSet<string>? flattenWarned = Flatten.IsPresent ? [] : null;
 
         foreach (var obj in _buffer)
@@ -295,30 +285,27 @@ public class ExpandMgxRelation : MgxCmdletBase
 
             if (id != null && resultsById.ContainsKey(id))
             {
-                if (!convertedCache.TryGetValue(id, out relationValue))
-                {
-                    var items = resultsById[id];
-                    var converted = items.Select(JsonToHashtable).ToArray();
+                // Converted per input object rather than once per id, so two inputs sharing an id
+                // get their own hashtables and writing to one relation cannot rewrite the other
+                var items = resultsById[id];
+                var converted = items.Select(JsonToHashtable).ToArray();
 
-                    if (Flatten.IsPresent)
+                if (Flatten.IsPresent)
+                {
+                    if (converted.Length <= 1)
                     {
-                        if (converted.Length <= 1)
-                        {
-                            relationValue = converted.Length == 1 ? converted[0] : null;
-                        }
-                        else
-                        {
-                            if (flattenWarned!.Add(id))
-                                WriteWarning($"-Flatten: entity '{id}' returned {converted.Length} items instead of 1. Returning array.");
-                            relationValue = converted;
-                        }
+                        relationValue = converted.Length == 1 ? converted[0] : null;
                     }
                     else
                     {
+                        if (flattenWarned!.Add(id))
+                            WriteWarning($"-Flatten: entity '{id}' returned {converted.Length} items instead of 1. Returning array.");
                         relationValue = converted;
                     }
-
-                    convertedCache[id] = relationValue;
+                }
+                else
+                {
+                    relationValue = converted;
                 }
             }
 
@@ -359,16 +346,30 @@ public class ExpandMgxRelation : MgxCmdletBase
         var resolved = IdPlaceholder.Replace(Uri, System.Uri.EscapeDataString(id));
         var url = $"{VersionedBaseUrl}{NormalizePath(resolved)}";
 
-        // Pass $top to Graph so it returns only the items we need,
-        // avoiding full-page downloads when only a few items are wanted.
-        // Client-side truncation in the lambda remains as a safety net.
-        if (Top > 0)
+        // Pass $top to Graph so it returns only the items we need, avoiding full-page downloads
+        // when only a few items are wanted. Skipped when the caller already wrote one into
+        // -Uri: Graph rejects a URL carrying $top twice, which turned -Top into a 400 for
+        // every input object.
+        // The client-side truncation in the lambda enforces -Top either way.
+        if (Top > 0 && !HasTopQueryOption(url))
         {
             var separator = url.Contains('?') ? "&" : "?";
             url = $"{url}{separator}$top={Top}";
         }
 
         return url;
+    }
+
+    private static bool HasTopQueryOption(string url)
+    {
+        var q = url.IndexOf('?');
+        if (q < 0) return false;
+        foreach (var part in url[(q + 1)..].Split('&'))
+        {
+            var name = part.Split('=', 2)[0];
+            if (string.Equals(name, "$top", StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
     }
 
     private void HandleFanOutErrors(

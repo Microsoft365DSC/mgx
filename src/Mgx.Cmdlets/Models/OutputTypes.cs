@@ -19,17 +19,29 @@ public sealed class MgxTelemetryOutput
     public long TotalElapsedMs { get; set; }
     public long ResourceUnitsConsumed { get; set; }
     public long BatchItemThrottles { get; set; }
+    public long AdaptivePacingWaitMs { get; set; }
+    public long AdaptivePacingActivations { get; set; }
+
+    /// <summary>Most recent x-ms-throttle-limit-percentage seen (raw ratio, e.g. 0.85);
+    /// -1 when Graph never sent one this session.</summary>
+    public double LastThrottlePercentage { get; set; }
+
+    /// <summary>Human-readable per-workload pacing state (adapted caps, slow start,
+    /// proximity, latency vs baseline). Null when nothing is active.</summary>
+    public string? PacingState { get; set; }
+
+    /// <summary>Bytes downloaded through Get-MgxContent (both hops).</summary>
+    public long ContentBytesDownloaded { get; set; }
 }
 
-/// <summary>
-/// Output type for Get-MgxOption.
-/// </summary>
+/// <summary>Output type for Get-MgxOption.</summary>
 public sealed class MgxOptionOutput
 {
     public int RateLimitBurst { get; set; }
     public int RateLimitPerSecond { get; set; }
     public bool NoRateLimit { get; set; }
     public int RateLimitQueueLimit { get; set; }
+    public bool NoAdaptivePacing { get; set; }
     public int MaxRetryAttempts { get; set; }
     public int MaxRetryAfterSeconds { get; set; }
     public int TotalTimeoutSeconds { get; set; }
@@ -42,9 +54,7 @@ public sealed class MgxOptionOutput
     public int BatchItemsPerSecond { get; set; }
 }
 
-/// <summary>
-/// Output type for Get-MgxResilience.
-/// </summary>
+/// <summary>Output type for Get-MgxResilience.</summary>
 public sealed class MgxResilienceOutput
 {
     public bool IsEnabled { get; set; }
@@ -52,9 +62,7 @@ public sealed class MgxResilienceOutput
     public string? Warning { get; set; }
 }
 
-/// <summary>
-/// Output type for Export-MgxCollection summary.
-/// </summary>
+/// <summary>Output type for Export-MgxCollection summary.</summary>
 public sealed class MgxExportResult
 {
     public long ItemCount { get; set; }

@@ -3,8 +3,8 @@
     <Project Path="src/Mgx.Cmdlets/Mgx.Cmdlets.csproj" />
     <Project Path="src/Mgx.Engine/Mgx.Engine.csproj" />
   </Folder>
-  <Folder Name="/Tests/">
-    <Project Path="Tests/Mgx.IntegrationTests/Mgx.IntegrationTests.csproj" />
-    <Project Path="Tests/Mgx.E2ETests/Mgx.E2ETests.csproj" />
+  <Folder Name="/tests/">
+    <Project Path="tests/Mgx.IntegrationTests/Mgx.IntegrationTests.csproj" />
+    <Project Path="tests/Mgx.E2ETests/Mgx.E2ETests.csproj" />
   </Folder>
 </Solution>

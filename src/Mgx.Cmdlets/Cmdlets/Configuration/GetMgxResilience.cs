@@ -1,13 +1,11 @@
 using System.Management.Automation;
+using Mgx.Cmdlets.Models;
 
 namespace Mgx.Cmdlets.Cmdlets.Configuration;
 
-/// <summary>
-/// Returns the current state of MgxResilience injection.
-/// Outputs a PSObject with IsEnabled and whether the injected client is still active.
-/// </summary>
+/// <summary>Get-MgxResilience: Report whether resilience injection is enabled and still active.</summary>
 [Cmdlet(VerbsCommon.Get, "MgxResilience")]
-[OutputType(typeof(PSObject))]
+[OutputType(typeof(MgxResilienceOutput))]
 public class GetMgxResilience : PSCmdlet
 {
     protected override void ProcessRecord()

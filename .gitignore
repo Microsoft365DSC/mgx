@@ -20,7 +20,8 @@ Modules/M365DSC.mgx/.build-hash
 
 # Test output
 TestResults/
-Tests/TestResults.xml
+tests/TestResults.xml
+tests/benchmarks/results/*
 *.trx
 coverage/
 artifacts/

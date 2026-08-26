@@ -1,7 +1,7 @@
 ---
 external help file: Mgx.Cmdlets.dll-Help.xml
 Module Name: Mgx
-online version: https://github.com/gromedev/mgx/blob/main/module/help/Get-MgxOption.md
+online version: https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Get-MgxOption.md
 schema: 2.0.0
 ---
 
@@ -46,7 +46,7 @@ This cmdlet supports the common parameters: -Debug, -ErrorAction, -ErrorVariable
 
 ## OUTPUTS
 
-### System.Management.Automation.PSObject
+### Mgx.Cmdlets.Models.MgxOptionOutput
 A PSObject with properties for each configuration setting.
 
 ## NOTES

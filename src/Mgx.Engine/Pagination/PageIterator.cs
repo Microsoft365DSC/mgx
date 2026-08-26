@@ -10,28 +10,18 @@ namespace Mgx.Engine.Pagination;
 /// </summary>
 public sealed record ResumeState(string NextLink, int SkipOnFirstPage, long ItemsAlreadyCollected);
 
-/// <summary>
-/// Information about a completed page, passed to the consumer via callback.
-/// </summary>
+/// <summary>Information about a completed page, passed to the consumer via callback.</summary>
 public sealed record PageCompletedInfo(string? NextPageUrl);
 
 /// <summary>
 /// Streaming page iterator that follows @odata.nextLink and yields items
 /// via IAsyncEnumerable for immediate pipeline output. Does not perform
-/// checkpoint I/O; the consumer owns checkpoint lifecycle.
+/// checkpoint I/O. The consumer owns checkpoint lifecycle.
 /// </summary>
 public sealed class PageIterator
 {
     private readonly ResilientGraphClient _client;
 
-    /// <summary>
-    /// Maximum consecutive empty pages before breaking to prevent infinite loops.
-    /// Graph API should never return empty pages with nextLink on regular endpoints.
-    /// Delta endpoints CAN return many empty pages with nextLink between the data
-    /// and the final deltaLink page (observed: 15+ empty pages on /users/delta).
-    /// When onDeltaLink is provided, the limit is raised to 1000 to allow delta
-    /// pagination to reach the final page while still guarding against Graph bugs.
-    /// </summary>
     private const int MaxConsecutiveEmptyPages = 3;
     private const int MaxConsecutiveEmptyPagesDelta = 1000;
 
@@ -46,11 +36,9 @@ public sealed class PageIterator
     /// Fires <paramref name="onPageComplete"/> after each page is fully yielded.
     /// </summary>
     /// <remarks>
-    /// SkipOnFirstPage uses positional skip, which assumes
-    /// the Graph API returns the same page content on re-fetch. If items were
-    /// added or deleted between crash and resume, positional skip may produce
-    /// duplicates or miss items. This is inherent to skiptoken-based pagination;
-    /// Graph does not provide idempotency tokens for collection endpoints.
+    /// SkipOnFirstPage skips positionally, which assumes Graph returns the same page content on
+    /// re-fetch. Items added or deleted between crash and resume can therefore be duplicated or
+    /// missed. This is inherent to skiptoken pagination, which has no idempotency token.
     /// </remarks>
     public async IAsyncEnumerable<JsonElement> StreamAllWithCountAsync(
         string initialUrl,
@@ -84,12 +72,21 @@ public sealed class PageIterator
             }
 
             // Capture deltaLink from the final page of a delta query response.
-            // Validated against expectedHost before surfacing.
+            // Validated against expectedHost before surfacing. A refused link is dropped, not
+            // thrown: every item has already been delivered by this point, the token simply
+            // does not advance, and the next sync repeats the enumeration - unlike a refused
+            // nextLink, where continuing silently would hand back a partial collection. Say
+            // so, or the caller reports "no delta token received" and misdiagnoses it.
             if (page.DeltaLink != null)
             {
                 var validatedDelta = NextLinkValidator.Validate(page.DeltaLink, expectedHost);
                 if (validatedDelta != null)
                     onDeltaLink?.Invoke(validatedDelta);
+                else if (onDeltaLink != null)
+                    _client.EnqueueWarning(
+                        "The service returned an @odata.deltaLink that failed validation, so the delta "
+                        + "token was not saved. Following it could send the access token to another "
+                        + "host. The next sync will repeat this enumeration from the previous token.");
             }
 
             if (page.Value.Length == 0)
@@ -119,7 +116,7 @@ public sealed class PageIterator
                     yield break;
             }
 
-            nextLink = NextLinkValidator.Validate(page.NextLink, expectedHost);
+            nextLink = NextLinkValidator.ValidateOrThrow(page.NextLink, expectedHost);
             isFirstPage = false;
 
             onPageComplete?.Invoke(new PageCompletedInfo(nextLink));

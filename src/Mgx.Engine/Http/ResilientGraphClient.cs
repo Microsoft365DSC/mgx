@@ -97,6 +97,10 @@ public sealed class ResilientGraphClient : IDisposable
             VerboseWriter(msg);
     }
 
+    // For engine components that already report through this client's buffered channel
+    // (PageIterator runs on the enumeration thread, where a cmdlet cannot WriteWarning).
+    internal void EnqueueWarning(string message) => _pendingWarnings.Enqueue(message);
+
     // Same threading contract as DrainVerboseMessages.
     public void DrainWarningMessages()
     {
@@ -121,11 +125,6 @@ public sealed class ResilientGraphClient : IDisposable
             DebugWriter(msg);
     }
 
-    /// <summary>
-    /// POST is the only non-idempotent method in Graph API.
-    /// GET/PUT/DELETE are idempotent by HTTP spec.
-    /// PATCH in Graph is always absolute property assignment (not incremental), so it's idempotent.
-    /// </summary>
     private static bool IsIdempotent(HttpMethod method) =>
         method != HttpMethod.Post;
 
@@ -140,7 +139,10 @@ public sealed class ResilientGraphClient : IDisposable
         HttpContent? content = null,
         Dictionary<string, string>? headers = null,
         CancellationToken cancellationToken = default,
-        int permitCount = 1)
+        int permitCount = 1,
+        bool paceGate = true,
+        bool traceResponseBody = true,
+        bool redirectIsSuccess = false)
     {
         // Buffer content bytes before pipeline so retries reconstruct fresh HttpContent.
         // Snapshot ALL content headers (not just ContentType) to preserve
@@ -169,8 +171,22 @@ public sealed class ResilientGraphClient : IDisposable
 
         var totalSw = Stopwatch.StartNew();
         bool succeeded = false;
+        var bucket = AdaptivePacing.Classify(requestUri);
         try
         {
+            // Proactive gate ahead of the bucket lease: the pacer spaces requests, the token
+            // bucket stays the hard backstop. Batch outer POSTs pass paceGate: false -
+            // GraphBatchClient owns batch throughput - but their responses still feed signals.
+            if (paceGate)
+            {
+                var pacedMs = await AdaptiveRequestPacer.WaitAsync(bucket, cancellationToken);
+                if (pacedMs > 0)
+                {
+                    MgxTelemetryCollector.Current.RecordPacingWait(pacedMs);
+                    _pendingVerbose.Enqueue($"Adaptive pacing: waited {pacedMs}ms before sending ({bucket} workload)");
+                }
+            }
+
             if (_rateLimiter != null)
             {
                 var limiterSw = Stopwatch.StartNew();
@@ -209,18 +225,43 @@ public sealed class ResilientGraphClient : IDisposable
                     // Stream response headers immediately instead of buffering entire body
                     var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ctx.CancellationToken);
                     MgxTelemetryCollector.Current.RecordHttpTime(httpSw.ElapsedMilliseconds);
+                    // Per-attempt network time feeds the latency baseline (telemetry-only:
+                    // makes the SPO soft-clamp visible. Not a pacing input in 2.1).
+                    AdaptiveRequestPacer.RecordLatency(bucket, httpSw.ElapsedMilliseconds);
 
                     if (DebugEnabled)
-                        await TraceResponseAsync(response, httpSw.ElapsedMilliseconds, ctx.CancellationToken);
+                    {
+                        if (traceResponseBody)
+                        {
+                            await TraceResponseAsync(response, httpSw.ElapsedMilliseconds, ctx.CancellationToken);
+                        }
+                        else
+                        {
+                            // Content path: buffering a multi-megabyte download to trace it
+                            // would defeat the streaming read. Headers-only line instead.
+                            _pendingDebug.Enqueue(GraphRequestTracer.FormatResponse(response, httpSw.ElapsedMilliseconds, null));
+                        }
+                    }
 
                     return response;
                 },
                 context);
-            succeeded = result.IsSuccessStatusCode;
+            // A redirect counts as success only for the caller that expects one. Graph answers
+            // /content with a 302 to a pre-authenticated download host and GraphContentClient
+            // follows it, so booking that as a failure made every successful two-hop download
+            // register as failed. Every OTHER caller treats a 3xx as an error and throws -
+            // AllowAutoRedirect is off - so a blanket 3xx-is-success would book a request the
+            // user saw fail as succeeded. Hence the per-call flag rather than a status range.
+            succeeded = result.IsSuccessStatusCode
+                || (redirectIsSuccess && (int)result.StatusCode >= 300 && (int)result.StatusCode < 400);
 
             // Log throttle proximity and diagnostic headers to verbose.
             // These headers warn that requests are approaching throttle limits before 429s hit.
             LogThrottleHeaders(result);
+
+            // Feed the pacer's signal state: throttle-proximity percentage, and a final 429
+            // that exhausted retries (OnRetry never fires for the last attempt).
+            AdaptiveRequestPacer.RecordResponse(bucket, result);
 
             // Track x-ms-resource-unit for telemetry (Identity/Access uses RU-based throttling).
             // Safe to record here: _pipeline.ExecuteAsync returns only the final response;
@@ -242,29 +283,37 @@ public sealed class ResilientGraphClient : IDisposable
         }
     }
 
-    /// <summary>
-    /// Send a GET request through the resilience pipeline.
-    /// </summary>
+    /// <summary>Send a GET request through the resilience pipeline.</summary>
     public Task<HttpResponseMessage> GetAsync(
         string requestUri,
         CancellationToken cancellationToken = default,
         Dictionary<string, string>? headers = null)
         => SendAsync(HttpMethod.Get, requestUri, headers: headers, cancellationToken: cancellationToken);
 
-    /// <summary>
-    /// Send a POST request through the resilience pipeline.
-    /// </summary>
+    /// <summary>Send a POST request through the resilience pipeline.</summary>
     public Task<HttpResponseMessage> PostAsync(
         string requestUri,
         HttpContent content,
         CancellationToken cancellationToken = default,
         Dictionary<string, string>? headers = null,
-        int permitCount = 1)
-        => SendAsync(HttpMethod.Post, requestUri, content, headers, cancellationToken, permitCount);
+        int permitCount = 1,
+        bool paceGate = true)
+        => SendAsync(HttpMethod.Post, requestUri, content, headers, cancellationToken, permitCount, paceGate);
 
     /// <summary>
-    /// Fetch a collection page and deserialize.
+    /// Fetch content bytes ($value / /content endpoints), optionally a byte range.
+    /// Two hops: the authenticated Graph request through the full pipeline, then - when Graph
+    /// 302s to a pre-authenticated download host - a token-free fetch through
+    /// GraphContentClient. See GraphContentClient for the transport preconditions.
     /// </summary>
+    public Task<GraphContentResult> GetContentAsync(
+        string requestUri,
+        System.Net.Http.Headers.RangeHeaderValue? range = null,
+        Dictionary<string, string>? headers = null,
+        CancellationToken cancellationToken = default)
+        => GraphContentClient.GetContentAsync(this, requestUri, range, headers, cancellationToken);
+
+    /// <summary>Fetch a collection page and deserialize.</summary>
     public async Task<GraphRawCollectionResponse> GetCollectionPageAsync(
         string requestUri,
         CancellationToken cancellationToken = default,
@@ -296,11 +345,6 @@ public sealed class ResilientGraphClient : IDisposable
         return cts;
     }
 
-    /// <summary>
-    /// Buffer the response body and queue a trace line for it. Buffering is what makes the body
-    /// readable twice: the caller still reads it normally afterwards.
-    /// A trace must never break a request, so a failed read degrades to a headers-only line.
-    /// </summary>
     private async Task TraceResponseAsync(HttpResponseMessage response, long elapsedMs, CancellationToken ct)
     {
         string? body = null;
@@ -326,16 +370,6 @@ public sealed class ResilientGraphClient : IDisposable
         throw new GraphServiceException(response.StatusCode, body);
     }
 
-    /// <summary>
-    /// Log Graph throttle proximity headers to verbose output.
-    /// These headers are officially documented but conditionally sent by Graph:
-    /// - x-ms-throttle-limit-percentage: only appears when >80% of throttle budget consumed
-    /// - x-ms-throttle-scope: typically only on 429 responses (format: Scope/Limit/AppId/TenantId)
-    /// - x-ms-throttle-information: diagnostic reason on 429 (e.g., CPULimitExceeded, ResourceUnitLimitExceeded)
-    /// Reliability varies by Graph endpoint. Some workloads never send these headers.
-    /// Tested against live tenant: headers do not appear at low request volumes (50 req).
-    /// Only logs when headers are present and VerboseWriter is set.
-    /// </summary>
     private void LogThrottleHeaders(HttpResponseMessage response)
     {
         if (VerboseWriter == null && WarningWriter == null) return;
@@ -351,7 +385,7 @@ public sealed class ResilientGraphClient : IDisposable
                 : null;
 
             // Header value is a ratio (0.8 = 80%, 1.2 = 120%). Scale: 0.8-1.8.
-            // Display as percentage for clarity; fall back to raw value if unparseable.
+            // Display as percentage for clarity. Fall back to raw value if unparseable.
             string msg;
             if (double.TryParse(pctStr, System.Globalization.NumberStyles.Any,
                     System.Globalization.CultureInfo.InvariantCulture, out var pct))

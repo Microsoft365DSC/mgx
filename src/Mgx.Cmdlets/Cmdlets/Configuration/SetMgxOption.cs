@@ -6,7 +6,7 @@ namespace Mgx.Cmdlets.Cmdlets.Configuration;
 
 /// <summary>
 /// Set-MgxOption: Configure resilience options for all Mgx cmdlets.
-/// Only parameters explicitly passed are updated; unspecified values retain their current settings.
+/// Only parameters explicitly passed are updated. Unspecified values retain their current settings.
 /// Options take effect on the next cmdlet invocation.
 /// Use -Reset to restore all options to their defaults.
 /// </summary>
@@ -27,6 +27,9 @@ public class SetMgxOption : PSCmdlet
     [Parameter]
     [ValidateRange(0, 100_000)]
     public int RateLimitQueueLimit { get; set; }
+
+    [Parameter]
+    public SwitchParameter NoAdaptivePacing { get; set; }
 
     [Parameter]
     [ValidateRange(1, 600)]
@@ -71,6 +74,13 @@ public class SetMgxOption : PSCmdlet
     [Parameter]
     public SwitchParameter Reset { get; set; }
 
+    private static readonly HashSet<string> CommonParameterNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Verbose", "Debug", "ErrorAction", "WarningAction", "InformationAction", "ProgressAction",
+        "ErrorVariable", "WarningVariable", "InformationVariable", "OutVariable", "OutBuffer",
+        "PipelineVariable", "WhatIf", "Confirm",
+    };
+
     protected override void ProcessRecord()
     {
         var bound = MyInvocation.BoundParameters;
@@ -81,7 +91,6 @@ public class SetMgxOption : PSCmdlet
         if (!ShouldProcess(target, "Set"))
             return;
 
-        // -Reset: restore all defaults and return
         if (Reset.IsPresent)
         {
             MgxCmdletBase.SetClientOptions(ResilientGraphClientOptions.Default);
@@ -91,14 +100,17 @@ public class SetMgxOption : PSCmdlet
         }
 
         // No parameters passed: nothing to do (avoids unnecessary pipeline rebuild
-        // which would destroy circuit breaker failure history)
-        if (bound.Count == 0)
+        // which would destroy circuit breaker failure history).
+        //
+        // Counted without the common parameters, which BoundParameters includes: -Verbose alone
+        // made this look like a real change, so `Set-MgxOption -Verbose` rebuilt the pipeline and
+        // discarded exactly the history this guard was written to keep.
+        if (!bound.Keys.Cast<string>().Any(k => !CommonParameterNames.Contains(k)))
         {
             WriteVerbose("No parameters specified. Options unchanged.");
             return;
         }
 
-        // Start from current options, only override values the user actually passed
         var current = MgxCmdletBase.s_clientOptions;
 
         // If user explicitly set rate params but NOT NoRateLimit,
@@ -114,6 +126,9 @@ public class SetMgxOption : PSCmdlet
             RateLimitBurst = bound.ContainsKey(nameof(RateLimitBurst)) ? RateLimitBurst : current.RateLimitBurst,
             RateLimitPerSecond = bound.ContainsKey(nameof(RateLimitPerSecond)) ? RateLimitPerSecond : current.RateLimitPerSecond,
             NoRateLimit = noRateLimit,
+            NoAdaptivePacing = bound.ContainsKey(nameof(NoAdaptivePacing))
+                ? NoAdaptivePacing.IsPresent
+                : current.NoAdaptivePacing,
             RateLimitQueueLimit = bound.ContainsKey(nameof(RateLimitQueueLimit)) ? RateLimitQueueLimit : current.RateLimitQueueLimit,
             MaxRetryAfterSeconds = bound.ContainsKey(nameof(MaxRetryAfterSeconds)) ? MaxRetryAfterSeconds : current.MaxRetryAfterSeconds,
             MaxRetryAttempts = bound.ContainsKey(nameof(MaxRetryAttempts)) ? MaxRetryAttempts : current.MaxRetryAttempts,
@@ -134,9 +149,23 @@ public class SetMgxOption : PSCmdlet
                         "Retries are effectively disabled because the total timeout will fire on the first attempt.");
         }
 
+        // -NoRateLimit switches off batch item pacing as well, which is a second mechanism
+        // against Graph's server-side WRITE throttle rather than the client-side limiter. Both
+        // are documented separately and -BatchItemsPerSecond 0 is the documented way to turn
+        // pacing off, so a caller who set both deserves to hear that one of them lost.
+        if (options.NoRateLimit && bound.ContainsKey(nameof(BatchItemsPerSecond))
+            && options.BatchItemsPerSecond > 0)
+        {
+            WriteWarning(
+                $"-NoRateLimit also disables batch item pacing, so -BatchItemsPerSecond "
+                + $"{options.BatchItemsPerSecond} has no effect. Drop -NoRateLimit to keep pacing, "
+                + "or set -BatchItemsPerSecond 0 to disable it explicitly.");
+        }
+
         MgxCmdletBase.SetClientOptions(options);
         WriteVerbose($"Mgx options updated: Burst={options.RateLimitBurst}, Rate={options.RateLimitPerSecond}/s, " +
-                    $"NoRateLimit={options.NoRateLimit}, QueueLimit={options.RateLimitQueueLimit}, " +
+                    $"NoRateLimit={options.NoRateLimit}, NoAdaptivePacing={options.NoAdaptivePacing}, " +
+                    $"QueueLimit={options.RateLimitQueueLimit}, " +
                     $"MaxRetry={options.MaxRetryAttempts}, TotalTimeout={options.TotalTimeoutSeconds}s, " +
                     $"AttemptTimeout={options.AttemptTimeoutSeconds}s, CBDuration={options.CircuitBreakerDurationSeconds}s, " +
                     $"CBFailureRatio={options.CircuitBreakerFailureRatio}, CBMinThroughput={options.CircuitBreakerMinThroughput}, " +

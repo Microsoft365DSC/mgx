@@ -25,26 +25,14 @@ namespace Mgx.Cmdlets.Cmdlets.Batch;
 [OutputType(typeof(Hashtable))]
 public class InvokeMgxBatchRequest : MgxCmdletBase
 {
-    /// <summary>
-    /// Graph API URLs to batch. Accepts absolute URLs (https://graph.microsoft.com/v1.0/users/id)
-    /// or relative URLs (/users/id). Also accepts Hashtables or PSObjects with Url/Method/Body members.
-    /// </summary>
     [Parameter(Mandatory = true, Position = 0, ValueFromPipeline = true)]
     [Alias("Url")]
     public object[] Uri { get; set; } = [];
 
-    /// <summary>
-    /// HTTP method for all requests (when piping string URLs). Default: GET.
-    /// Ignored when pipeline input carries its own Method member.
-    /// </summary>
     [Parameter]
     [ValidateSet("GET", "POST", "PATCH", "PUT", "DELETE")]
     public string Method { get; set; } = "GET";
 
-    /// <summary>
-    /// Request body for all requests (when piping string URLs).
-    /// Ignored when pipeline input carries its own Body member.
-    /// </summary>
     [Parameter]
     public object? Body { get; set; }
 
@@ -57,10 +45,6 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
     [ArgumentCompleter(typeof(ConsistencyLevelCompleter))]
     public string? ConsistencyLevel { get; set; }
 
-    /// <summary>
-    /// Custom headers applied to each individual batch item.
-    /// Merged with ConsistencyLevel (if specified). Keys are header names, values are header values.
-    /// </summary>
     [Parameter]
     public System.Collections.Hashtable? Headers { get; set; }
 
@@ -73,20 +57,12 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
     [ArgumentCompleter(typeof(ThrottlePriorityCompleter))]
     public string? ThrottlePriority { get; set; }
 
-    /// <summary>
-    /// Graph API version. Default: v1.0. Use "beta" for preview endpoints.
-    /// </summary>
+    /// <summary>Graph API version. Default: v1.0. Use "beta" for preview endpoints.</summary>
     [Parameter]
     [ValidateSet("v1.0", "beta")]
     [ArgumentCompleter(typeof(ApiVersionCompleter))]
     public string ApiVersion { get; set; } = "v1.0";
 
-    /// <summary>
-    /// Path to a JSONL file where failed batch items (status >= 400) are appended.
-    /// Each line contains Url, Method, Body (original request), Status, and Error.
-    /// The file can be re-piped to Invoke-MgxBatchRequest for retry:
-    ///   Get-Content dead.jsonl | ConvertFrom-Json | Invoke-MgxBatchRequest
-    /// </summary>
     [Parameter]
     public string? DeadLetterPath { get; set; }
 
@@ -115,12 +91,10 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                 return;
             }
 
-            // Resolve dead-letter path early (before network calls)
             string? resolvedDeadLetterPath = DeadLetterPath != null
                 ? GetUnresolvedProviderPathFromPSPath(DeadLetterPath)
                 : null;
 
-            // Validate: $search in any URL requires ConsistencyLevel
             var hasSearch = _collected.Any(c =>
                 c.Url.Contains("$search", StringComparison.OrdinalIgnoreCase));
             if (hasSearch && string.IsNullOrEmpty(ConsistencyLevel))
@@ -133,29 +107,33 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                 return;
             }
 
-            // ShouldProcess gate: only for batches containing write operations
+            // -WhatIf is documented as "the cmdlet is not run", without qualification, so the
+            // gate covers reads as well. A read-only batch changes nothing on the server, but it
+            // spends resource units, can be throttled, and emits objects into the pipeline -
+            // none of which is "not run", and none of which the caller asked for.
             var writeOps = _collected.Where(c =>
                 !string.Equals(c.Method, "GET", StringComparison.OrdinalIgnoreCase)).ToList();
 
-            if (writeOps.Count > 0)
+            string target;
+            if (writeOps.Count == 0)
             {
-                string target;
-                if (writeOps.All(o => string.Equals(o.Method, writeOps[0].Method, StringComparison.OrdinalIgnoreCase)))
-                {
-                    target = $"{writeOps[0].Method} {_collected.Count} requests via $batch";
-                }
-                else
-                {
-                    var breakdown = writeOps
-                        .GroupBy(o => o.Method.ToUpperInvariant())
-                        .OrderByDescending(g => g.Count())
-                        .Select(g => $"{g.Count()} {g.Key}");
-                    target = $"{_collected.Count} requests ({string.Join(", ", breakdown)}) via $batch";
-                }
-
-                if (!ShouldProcess(target, "Send batch"))
-                    return;
+                target = $"GET {_collected.Count} requests via $batch";
             }
+            else if (writeOps.All(o => string.Equals(o.Method, writeOps[0].Method, StringComparison.OrdinalIgnoreCase)))
+            {
+                target = $"{writeOps[0].Method} {_collected.Count} requests via $batch";
+            }
+            else
+            {
+                var breakdown = writeOps
+                    .GroupBy(o => o.Method.ToUpperInvariant())
+                    .OrderByDescending(g => g.Count())
+                    .Select(g => $"{g.Count()} {g.Key}");
+                target = $"{_collected.Count} requests ({string.Join(", ", breakdown)}) via $batch";
+            }
+
+            if (!ShouldProcess(target, "Send batch"))
+                return;
 
             var client = GetClient();
             var mergedHeaders = Headers != null ? new System.Collections.Hashtable(Headers) : null;
@@ -173,7 +151,9 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                 ItemHeaders = itemHeaders
             };
 
-            // Convert to BatchOperation list.
+            // Convert to BatchOperation list. An item whose body is not valid JSON fails on
+            // its own (non-terminating error) instead of aborting the whole batch. `submitted`
+            // keeps result indices aligned with the operations actually sent.
             var operations = new List<BatchOperation>(_collected.Count);
             var submitted = new List<BatchInput>(_collected.Count);
             foreach (var input in _collected)
@@ -209,7 +189,6 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
             var results = batchResult.Results;
             var telemetry = batchResult.Telemetry;
 
-            // Output all results as Hashtables (success and failure)
             for (int i = 0; i < results.Count; i++)
             {
                 var (_, item) = results[i];
@@ -225,28 +204,26 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                         : null
                 };
 
+                // Status 0 means the operation was never sent, because a chunk before it failed.
+                // It is not a success and must not read as one - the caller has to be able to
+                // tell a write that may have landed from one that certainly did not.
+                if (item.Status == GraphBatchClient.NotSentStatus)
+                    result["NotSent"] = true;
+
                 // Single-argument WriteObject does not enumerate, so the Hashtable is emitted whole
                 WriteObject(result);
             }
 
-            // Emit errors for failed items (enables -ErrorAction Stop, populates $Error)
-            for (int i = 0; i < results.Count; i++)
+            // A chunk's POST failed after earlier chunks were applied. Their results are above;
+            // this says why the rest never went, and NotSent names them.
+            if (batchResult.ChunkFailure != null)
             {
-                var (_, item) = results[i];
-                if (item.Status >= 400)
-                {
-                    var input = submitted[i];
-                    var graphMessage = TryExtractBatchErrorMessage(item);
-                    var errorMessage = graphMessage != null
-                        ? $"{input.Method} {input.Url}: {graphMessage}"
-                        : $"HTTP {item.Status} for {input.Method} {input.Url}";
-                    var ex = new InvalidOperationException(errorMessage);
-                    WriteError(new ErrorRecord(ex, "BatchItemError",
-                        MapStatusToCategory((HttpStatusCode)item.Status), input.Url));
-                }
+                var notSent = batchResult.NotSent.Count;
+                WriteError(new ErrorRecord(batchResult.ChunkFailure, "BatchChunkFailed",
+                    ErrorCategory.NotSpecified,
+                    $"{notSent} of {results.Count} operations were not sent"));
             }
 
-            // Write failed items to dead-letter file (append mode)
             if (resolvedDeadLetterPath != null)
             {
                 var failedCount = 0;
@@ -256,7 +233,7 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                     for (int i = 0; i < results.Count; i++)
                     {
                         var (_, item) = results[i];
-                        if (item.Status < 400) continue;
+                        if (item.Status < 400 && item.Status != GraphBatchClient.NotSentStatus) continue;
 
                         var input = submitted[i];
                         var deadLetter = new JsonObject
@@ -292,7 +269,31 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                     WriteVerbose($"Wrote {failedCount} failed items to dead-letter file: {resolvedDeadLetterPath}");
             }
 
-            // Structured telemetry summary
+            // Per-item errors, so -ErrorAction Stop trips and $Error is populated
+            for (int i = 0; i < results.Count; i++)
+            {
+                var (_, item) = results[i];
+                if (item.Status == GraphBatchClient.NotSentStatus)
+                {
+                    var skipped = submitted[i];
+                    WriteError(new ErrorRecord(
+                        new InvalidOperationException(
+                            $"{skipped.Method} {skipped.Url} was not sent: an earlier chunk failed."),
+                        "BatchItemNotSent", ErrorCategory.NotSpecified, skipped.Url));
+                }
+                else if (item.Status >= 400)
+                {
+                    var input = submitted[i];
+                    var graphMessage = TryExtractBatchErrorMessage(item);
+                    var errorMessage = graphMessage != null
+                        ? $"{input.Method} {input.Url}: {graphMessage}"
+                        : $"HTTP {item.Status} for {input.Method} {input.Url}";
+                    var itemError = new InvalidOperationException(errorMessage);
+                    WriteError(new ErrorRecord(itemError, "BatchItemError",
+                        MapStatusToCategory((HttpStatusCode)item.Status), input.Url));
+                }
+            }
+
             WriteBatchTelemetry(telemetry);
         }
         catch (Exception ex) when (ex is GraphServiceException or BrokenCircuitException or HttpRequestException)
@@ -352,9 +353,6 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
         return null;
     }
 
-    /// <summary>
-    /// Converts an absolute Graph URL to a relative path for /$batch.
-    /// </summary>
     private string NormalizeToRelativeUrl(string url)
     {
         if (url.StartsWith('/'))
@@ -447,11 +445,14 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
 
     private void WriteBatchTelemetry(BatchTelemetry telemetry)
     {
-        // Propagate per-item 429 counts to session telemetry
         if (telemetry.ThrottleEncounters > 0)
             MgxTelemetryCollector.Current.RecordBatchItemThrottles(telemetry.ThrottleEncounters);
 
-        // Always emit verbose summary with timing breakdown
+        // Propagate item-retry delay time so Get-MgxTelemetry's RetryDelayMs reflects
+        // batch retry waits
+        if (telemetry.TotalRetryDelayMs > 0)
+            MgxTelemetryCollector.Current.RecordBatchRetryDelay(telemetry.TotalRetryDelayMs);
+
         var elapsedSec = telemetry.TotalElapsedMs / 1000.0;
         var throughput = telemetry.TotalElapsedMs > 0 ? telemetry.TotalRequests / elapsedSec : 0;
         var summary = $"Batch: {telemetry.Succeeded} succeeded, {telemetry.Failed} failed out of {telemetry.TotalRequests} requests in {elapsedSec:F1}s ({throughput:F1}/sec).";
@@ -465,7 +466,6 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
             summary += $" Time in retry delays: {telemetry.TotalRetryDelayMs / 1000.0:F1}s.";
         WriteVerbose(summary);
 
-        // Warn if any items failed after all retry attempts
         if (telemetry.Failed > 0)
         {
             WriteWarning(
