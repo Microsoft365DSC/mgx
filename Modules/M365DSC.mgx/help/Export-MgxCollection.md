@@ -349,8 +349,8 @@ This cmdlet supports the common parameters: -Debug, -ErrorAction, -ErrorVariable
 
 ## OUTPUTS
 
-### System.Management.Automation.PSObject
-Summary object with ItemCount and OutputFile properties.
+### Mgx.Cmdlets.Models.MgxExportResult
+Summary object with ItemCount, OutputFile, Duration and ResumedFrom properties.
 
 ## NOTES
 Checkpoint uses positional skip, which assumes the Graph API returns the same page content on re-fetch. If items were added or deleted between interruption and resume, positional skip may produce duplicates or miss items.

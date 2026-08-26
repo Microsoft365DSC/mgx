@@ -1190,10 +1190,10 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
     <command:returnValues>
       <command:returnValue>
         <dev:type>
-          <maml:name>System.Management.Automation.PSObject</maml:name>
+          <maml:name>Mgx.Cmdlets.Models.MgxExportResult</maml:name>
         </dev:type>
         <maml:description>
-          <maml:para>Summary object with ItemCount and OutputFile properties.</maml:para>
+          <maml:para>Summary object with ItemCount, OutputFile, Duration and ResumedFrom properties.</maml:para>
         </maml:description>
       </command:returnValue>
     </command:returnValues>

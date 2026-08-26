@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Management.Automation;
 using System.Net;
 using Mgx.Cmdlets.Base;
+using Mgx.Cmdlets.Models;
 using Mgx.Engine.Http;
 using Mgx.Engine.Models;
 using Mgx.Engine.Pagination;
@@ -13,11 +14,11 @@ namespace Mgx.Cmdlets.Cmdlets.Export;
 /// Export-MgxCollection: Stream paginated Graph API results directly to a JSONL file.
 /// One JSON object per line. No PSObject conversion, minimal memory pressure.
 /// Supports checkpoint/resume for interrupted exports.
-/// Consumer owns checkpoint lifecycle: saves at page boundaries and mid-page flushes
-/// to prevent duplicate items on crash resume (H6 dedup fix).
+/// The consumer owns the checkpoint lifecycle, saving at page boundaries and mid-page flushes
+/// so a crash resume cannot duplicate items.
 /// </summary>
 [Cmdlet(VerbsData.Export, "MgxCollection", SupportsShouldProcess = true)]
-[OutputType(typeof(PSObject))]
+[OutputType(typeof(MgxExportResult))]
 public class ExportMgxCollection : MgxCmdletBase
 {
     [Parameter(Mandatory = true, Position = 0)]

@@ -16,7 +16,7 @@ Merges upstream `gromedev/mgx` 2.1.1. The module name, version line, target fram
 ### Fixed
 
 - `Invoke-MgxBatchRequest` emitted no per-item error for a failed batch item unless `-DeadLetterPath` was given and writing that file then threw, so `-ErrorAction Stop` did not trip and `$Error` stayed empty. The per-item errors now run on every batch.
-- `Get-MgxResilience` declared `[OutputType(typeof(PSObject))]` while emitting `MgxResilienceOutput`. It now declares the type it returns.
+- `Get-MgxResilience` and `Export-MgxCollection` declared `[OutputType(typeof(PSObject))]` while emitting `MgxResilienceOutput` and `MgxExportResult`. Both now declare the type they return.
 - Enumeration returned part of a collection without an error when a `nextLink` was refused. A refused link now throws, so a truncated result can no longer be mistaken for a complete one.
 - `-Debug` wrote pre-authenticated download URLs verbatim, from both redirect headers and response bodies. Capability-carrying URLs and `Location` headers are now redacted.
 - Cmdlets reported "run Connect-MgGraph" even when `Microsoft.Graph.Authentication` was not installed at all. Absent and disconnected are now told apart. This closes a gap left when 2.0.3 removed the manifest dependency.
