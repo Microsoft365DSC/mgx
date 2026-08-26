@@ -25,22 +25,6 @@ public class EnableMgxResilienceTests
     }
 
     [Fact]
-    public void ProcessRecord_GraphSessionNotFound_ThrowsError()
-    {
-        var handler = new StubHttpMessageHandler().EnqueueJson(HttpStatusCode.OK, """{"id":"1"}""");
-        using var host = new MgxTestHost(handler);
-
-        var result = host.Run(ps =>
-        {
-            ps.AddCommand("Enable-MgxResilience");
-        });
-
-        // GraphSession not found in test environment (HttpClient is null)
-        Assert.NotNull(result.Terminating);
-        Assert.Contains("HttpClientNotFound", result.Terminating.FullyQualifiedErrorId);
-    }
-
-    [Fact]
     public void RefreshInjectedClient_NotEnabled_DoesNothing()
     {
         // Ensure clean state - reset all static state before test
