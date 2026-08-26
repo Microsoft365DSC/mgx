@@ -116,7 +116,7 @@ jobs:
 
       # Pulled explicitly so a registry problem fails here rather than as a wait-strategy timeout
       - name: Pre-pull WireMock Image
-        run: docker pull wiremock/wiremock:3.13.1
+        run: docker pull wiremock/wiremock:3.13.2
 
       - name: Run E2E Tests
         run: >

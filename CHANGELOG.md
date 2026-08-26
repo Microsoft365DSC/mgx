@@ -7,6 +7,10 @@
 - Added `Tests/Mgx.E2ETests`, which runs the cmdlets in a real runspace against a WireMock container serving canned Graph responses over HTTPS. HTTPS is required rather than incidental because `NextLinkValidator` drops any non-https `@odata.nextLink`. A plain-HTTP mock would end pagination after one page while still reporting success.
 - The CI workflow is now three jobs. Windows keeps the module build, unit tests and Pester surface tests. The E2E job runs on Linux because Windows runners cannot host Linux containers. A third job merges the coverage from both and writes the summary.
 - Internal: `MgxCmdletBase` gained an `internal static` transport override for tests that host the cmdlets without a Graph connection.
+- Updated `Testcontainers` to `4.14.0` to fix warning about old and vulnerable `SSH.NET` dependency package, while here update empty constructor `ContainerBuilder()`, which now is obsolete, to `ContainerBuilder(Image)`.
+- Updated `Wiremock` docker image to `3.13.2`
+- Changed method `ResolveDependency`, from class `AlcInitializer`, from `private` to `internal` for testability
+- Added several new tests to increase code coverage
 
 ## 2.0.4
 

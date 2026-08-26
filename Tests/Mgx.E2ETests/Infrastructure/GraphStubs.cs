@@ -67,6 +67,15 @@ public static class GraphStubs
     public static string UsersWithNext(string nextLink, params string[] ids)
         => $$"""{ "@odata.nextLink": "{{nextLink}}", "value": [ {{string.Join(",", ids.Select(i => $$"""{ "id": "{{i}}" }"""))}} ] }""";
 
+    public static string UsersWithSelect(string nextLink, params string[] ids)
+        => $$"""{ "@odata.nextLink": "{{nextLink}}", "value": [ {{string.Join(",", ids.Select(i => $$"""{ "id": "{{i}}", "displayName": "{{i}}" }"""))}} ] }""";
+
+    public static string UsersWithFilter(string nextLink, params string[] ids)
+        => $$"""{ "@odata.nextLink": "{{nextLink}}", "value": [ {{string.Join(",", ids.Select(i => $$"""{ "id": "{{i}}", "displayName": "{{i}}" }"""))}} ] }""";
+
+    public static string UsersWithFilterSelect(string nextLink, params string[] ids)
+        => $$"""{ "@odata.nextLink": "{{nextLink}}", "value": [ {{string.Join(",", ids.Select(i => $$"""{ "id": "{{i}}" }"""))}} ] }""";
+
     public static string BatchResponses(params string[] items)
         => $$"""{ "responses": [ {{string.Join(",", items)}} ] }""";
 

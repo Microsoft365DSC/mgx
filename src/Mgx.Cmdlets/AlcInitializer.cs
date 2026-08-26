@@ -22,7 +22,7 @@ public class AlcInitializer : IModuleAssemblyInitializer, IModuleAssemblyCleanup
         AssemblyLoadContext.Default.Resolving += ResolveDependency;
     }
 
-    private static Assembly? ResolveDependency(AssemblyLoadContext defaultAlc, AssemblyName name)
+    internal static Assembly? ResolveDependency(AssemblyLoadContext defaultAlc, AssemblyName name)
     {
         try
         {
