@@ -7,7 +7,7 @@ using Mgx.Engine.Models;
 namespace Mgx.IntegrationTests.Engine;
 
 /// <summary>
-/// Additional tests to push PaginationCheckpoint to 95%.
+/// Additional tests to PaginationCheckpoint.
 /// </summary>
 public class PaginationCheckpointFinalCoverageTests : IDisposable
 {

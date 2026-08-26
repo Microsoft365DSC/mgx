@@ -6,7 +6,7 @@ using Mgx.IntegrationTests.Fakes;
 namespace Mgx.IntegrationTests.Engine;
 
 /// <summary>
-/// Additional coverage tests for ResilientGraphClient to push toward 95%.
+/// Additional coverage tests for ResilientGraphClient.
 /// </summary>
 public class ResilientGraphClientAdditionalCoverageTests
 {

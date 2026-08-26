@@ -4,7 +4,7 @@ using Mgx.Engine;
 namespace Mgx.IntegrationTests.Engine;
 
 /// <summary>
-/// Tests to push MgxSdkVersion to 95%.
+/// Tests for MgxSdkVersion.
 /// </summary>
 public class MgxSdkVersionFinalCoverageTests
 {
@@ -19,7 +19,7 @@ public class MgxSdkVersionFinalCoverageTests
     {
         var assembly = typeof(MgxSdkVersion).Assembly;
         var infoAttr = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
-        
+
         if (infoAttr != null && !string.IsNullOrWhiteSpace(infoAttr.InformationalVersion))
         {
             var expected = infoAttr.InformationalVersion.Split('+')[0];

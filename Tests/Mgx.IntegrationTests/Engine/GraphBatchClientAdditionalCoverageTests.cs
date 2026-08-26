@@ -7,7 +7,7 @@ using Mgx.IntegrationTests.Fakes;
 namespace Mgx.IntegrationTests.Engine;
 
 /// <summary>
-/// Additional coverage tests for GraphBatchClient to push toward 95%.
+/// Additional coverage tests for GraphBatchClient.
 /// </summary>
 public class GraphBatchClientAdditionalCoverageTests
 {
@@ -240,7 +240,7 @@ public class GraphBatchClientAdditionalCoverageTests
         });
 
         var batch = new GraphBatchClient(client, "https://graph.microsoft.com/v1.0", 1, 1, 0);
-        
+
         // After max retries, it should throw GraphServiceException
         await Assert.ThrowsAsync<GraphServiceException>(async () =>
             await batch.ExecuteBatchIndexedAsync([new BatchOperation("/users/1", "GET")], CancellationToken.None));

@@ -7,7 +7,7 @@ using Mgx.IntegrationTests.Engine;
 namespace Mgx.IntegrationTests.Engine;
 
 /// <summary>
-/// Tests for MgxTelemetryCollector to boost coverage to 95%+.
+/// Tests for MgxTelemetryCollector.
 /// </summary>
 [Collection(ResilienceCollection.Name)]
 public class MgxTelemetryCollectorTests

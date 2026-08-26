@@ -12,7 +12,7 @@ using Mgx.IntegrationTests.Fakes;
 namespace Mgx.IntegrationTests.Engine;
 
 /// <summary>
-/// Tests for GraphBatchClient to boost coverage to 95%+.
+/// Tests for GraphBatchClient.
 /// </summary>
 [Collection(ResilienceCollection.Name)]
 public class GraphBatchClientCoverageTests

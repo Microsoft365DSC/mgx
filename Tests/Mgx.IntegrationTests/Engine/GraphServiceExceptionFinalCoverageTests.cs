@@ -4,7 +4,7 @@ using Mgx.Engine.Models;
 namespace Mgx.IntegrationTests.Engine;
 
 /// <summary>
-/// Tests to push GraphServiceException to 95%.
+/// Tests for GraphServiceException.
 /// </summary>
 public class GraphServiceExceptionFinalCoverageTests
 {
