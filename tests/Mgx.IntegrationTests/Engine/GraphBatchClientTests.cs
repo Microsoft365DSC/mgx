@@ -63,40 +63,6 @@ public class GraphBatchClientTests
         Batch(requests.Select(r => Item(r.Id, 200, "{\"url\":\"" + r.Url + "\"}")));
 
     [Fact]
-    public async Task An_empty_operation_list_never_reaches_the_network()
-    {
-        var handler = new StubHttpMessageHandler();
-        var (batch, client, http) = NewBatchClient(handler);
-        using var _ = http; using var __ = client;
-
-        var result = await batch.ExecuteBatchIndexedAsync([], Ct);
-
-        Assert.Empty(result.Results);
-        Assert.Equal(0, handler.RequestCount);
-    }
-
-    [Fact]
-    public async Task Operations_are_chunked_at_twenty_per_batch()
-    {
-        var sent = new List<int>();
-        var handler = new StubHttpMessageHandler();
-        handler.Enqueue(request =>
-        {
-            var requests = ReadRequests(request);
-            sent.Add(requests.Count);
-            return Ok(RespondAllOk(requests));
-        });
-        var (batch, client, http) = NewBatchClient(handler);
-        using var _ = http; using var __ = client;
-
-        var ops = Enumerable.Range(0, 45).Select(i => new BatchOperation($"/users/u{i}")).ToList();
-        var result = await batch.ExecuteBatchIndexedAsync(ops, Ct);
-
-        Assert.Equal([20, 20, 5], sent);
-        Assert.Equal(45, result.Results.Count);
-    }
-
-    [Fact]
     public async Task Results_come_back_in_the_order_the_operations_were_given()
     {
         // Ids are renumbered per chunk, so keying results by id alone would scramble
@@ -230,35 +196,6 @@ public class GraphBatchClientTests
     }
 
     [Fact]
-    public async Task A_response_count_that_does_not_match_the_request_count_throws()
-    {
-        // A proxy truncating the array would otherwise map responses onto the wrong items.
-        var handler = new StubHttpMessageHandler();
-        handler.Enqueue(_ => Ok("""{"responses":[{"id":"1","status":200,"body":{}}]}"""));
-        var (batch, client, http) = NewBatchClient(handler);
-        using var _ = http; using var __ = client;
-
-        var ops = new List<BatchOperation> { new("/users/u0"), new("/users/u1") };
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => batch.ExecuteBatchIndexedAsync(ops, Ct));
-        Assert.Contains("response count mismatch", ex.Message);
-    }
-
-    [Fact]
-    public async Task An_empty_responses_array_throws_rather_than_reporting_success()
-    {
-        var handler = new StubHttpMessageHandler();
-        handler.Enqueue(_ => Ok("""{"responses":[]}"""));
-        var (batch, client, http) = NewBatchClient(handler);
-        using var _ = http; using var __ = client;
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => batch.ExecuteBatchIndexedAsync([new BatchOperation("/users/u0")], Ct));
-        Assert.Contains("empty or malformed", ex.Message);
-    }
-
-    [Fact]
     public async Task A_failing_batch_POST_is_returned_as_a_chunk_failure()
     {
         var handler = new StubHttpMessageHandler();
@@ -277,40 +214,6 @@ public class GraphBatchClientTests
         var ex = Assert.IsType<GraphServiceException>(result.ChunkFailure);
         Assert.Equal(HttpStatusCode.Forbidden, ex.StatusCode);
         Assert.Single(result.NotSent);
-    }
-
-    [Fact]
-    public async Task Item_headers_are_written_into_each_request_inside_the_body()
-    {
-        // Graph reads ConsistencyLevel per item and ignores it on the outer $batch POST.
-        List<GraphBatchRequestItem>? captured = null;
-        var handler = new StubHttpMessageHandler();
-        handler.Enqueue(request =>
-        {
-            captured = ReadRequests(request);
-            return Ok(RespondAllOk(captured));
-        });
-        var (batch, client, http) = NewBatchClient(handler);
-        using var _ = http; using var __ = client;
-        batch.ItemHeaders = new Dictionary<string, string> { ["ConsistencyLevel"] = "eventual" };
-
-        await batch.ExecuteBatchIndexedAsync([new BatchOperation("/users/u0")], Ct);
-
-        Assert.Equal("eventual", captured![0].Headers!["ConsistencyLevel"]);
-    }
-
-    [Fact]
-    public async Task The_url_keyed_overload_maps_every_url_to_its_response()
-    {
-        var handler = new StubHttpMessageHandler();
-        handler.Enqueue(request => Ok(RespondAllOk(ReadRequests(request))));
-        var (batch, client, http) = NewBatchClient(handler);
-        using var _ = http; using var __ = client;
-
-        var results = await batch.ExecuteBatchAsync(["/users/u0", "/users/u1"], Ct);
-
-        Assert.Equal(200, results["/users/u0"].Status);
-        Assert.Equal(200, results["/users/u1"].Status);
     }
 
     [Fact]

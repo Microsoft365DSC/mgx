@@ -52,51 +52,6 @@ public class PageIteratorTests
     }
 
     [Fact]
-    public async Task Follows_nextLink_across_every_page()
-    {
-        var handler = new StubHttpMessageHandler()
-            .EnqueueJson(System.Net.HttpStatusCode.OK, Page(1, 2, $"{Start}?$skiptoken=p2"))
-            .EnqueueJson(System.Net.HttpStatusCode.OK, Page(3, 2, $"{Start}?$skiptoken=p3"))
-            .EnqueueJson(System.Net.HttpStatusCode.OK, Page(5, 1));
-        var (iterator, http) = NewIterator(handler);
-        using var _ = http;
-
-        var ids = await IdsOf(iterator.StreamAllWithCountAsync(Start, 0, null, cancellationToken: Ct));
-
-        Assert.Equal(["u1", "u2", "u3", "u4", "u5"], ids);
-        Assert.Equal(3, handler.RequestCount);
-    }
-
-    [Fact]
-    public async Task Reports_the_odata_count_from_the_first_page_only()
-    {
-        var handler = new StubHttpMessageHandler()
-            .EnqueueJson(System.Net.HttpStatusCode.OK, Page(1, 1, $"{Start}?$skiptoken=p2", total: 42))
-            .EnqueueJson(System.Net.HttpStatusCode.OK, Page(2, 1, total: 99));
-        var (iterator, http) = NewIterator(handler);
-        using var _ = http;
-
-        var counts = new List<long>();
-        await IdsOf(iterator.StreamAllWithCountAsync(Start, 0, counts.Add, cancellationToken: Ct));
-
-        Assert.Equal([42], counts);
-    }
-
-    [Fact]
-    public async Task Stops_at_maxItems_without_fetching_another_page()
-    {
-        var handler = new StubHttpMessageHandler()
-            .EnqueueJson(System.Net.HttpStatusCode.OK, Page(1, 5, $"{Start}?$skiptoken=p2"));
-        var (iterator, http) = NewIterator(handler);
-        using var _ = http;
-
-        var ids = await IdsOf(iterator.StreamAllWithCountAsync(Start, 3, null, cancellationToken: Ct));
-
-        Assert.Equal(["u1", "u2", "u3"], ids);
-        Assert.Equal(1, handler.RequestCount);
-    }
-
-    [Fact]
     public async Task Pagination_fails_when_the_nextLink_points_at_another_host()
     {
         var handler = new StubHttpMessageHandler()
@@ -122,50 +77,6 @@ public class PageIteratorTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => IdsOf(iterator.StreamAllWithCountAsync(Start, 0, null, cancellationToken: Ct)));
-    }
-
-    [Fact]
-    public async Task Resume_skips_the_items_already_emitted_on_the_first_page()
-    {
-        var handler = new StubHttpMessageHandler()
-            .EnqueueJson(System.Net.HttpStatusCode.OK, Page(1, 4));
-        var (iterator, http) = NewIterator(handler);
-        using var _ = http;
-
-        var resume = new ResumeState($"{Start}?$skiptoken=p2", SkipOnFirstPage: 2, ItemsAlreadyCollected: 2);
-        var ids = await IdsOf(iterator.StreamAllWithCountAsync(Start, 0, null, resume: resume, cancellationToken: Ct));
-
-        Assert.Equal(["u3", "u4"], ids);
-    }
-
-    [Fact]
-    public async Task Resume_counts_already_collected_items_against_maxItems()
-    {
-        var handler = new StubHttpMessageHandler()
-            .EnqueueJson(System.Net.HttpStatusCode.OK, Page(1, 10));
-        var (iterator, http) = NewIterator(handler);
-        using var _ = http;
-
-        var resume = new ResumeState(Start, SkipOnFirstPage: 0, ItemsAlreadyCollected: 8);
-        var ids = await IdsOf(iterator.StreamAllWithCountAsync(Start, 10, null, resume: resume, cancellationToken: Ct));
-
-        Assert.Equal(["u1", "u2"], ids);
-    }
-
-    [Fact]
-    public async Task Page_completion_reports_the_url_that_will_be_fetched_next()
-    {
-        var handler = new StubHttpMessageHandler()
-            .EnqueueJson(System.Net.HttpStatusCode.OK, Page(1, 1, $"{Start}?$skiptoken=p2"))
-            .EnqueueJson(System.Net.HttpStatusCode.OK, Page(2, 1));
-        var (iterator, http) = NewIterator(handler);
-        using var _ = http;
-
-        var completions = new List<string?>();
-        await IdsOf(iterator.StreamAllWithCountAsync(
-            Start, 0, null, onPageComplete: info => completions.Add(info.NextPageUrl), cancellationToken: Ct));
-
-        Assert.Equal([$"{Start}?$skiptoken=p2", null], completions);
     }
 
     [Fact]

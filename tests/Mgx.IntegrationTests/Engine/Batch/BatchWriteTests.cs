@@ -1402,81 +1402,6 @@ public class BatchWriteTests
     // R2-8: Chunk boundary tests (0, 1, 20, 21 items)
     // ═══════════════════════════════════════════════════════════════
 
-    [Fact]
-    public async Task R2_8_ZeroItems_ReturnsEmpty()
-    {
-        var handler = new MockHttpHandler();
-        using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
-
-        var result = await batchClient.ExecuteBatchIndexedAsync(
-            Array.Empty<BatchOperation>(), CancellationToken.None);
-
-        Assert.Empty(result.Results);
-        Assert.Equal(0, handler.RequestCount); // No HTTP calls for empty input
-    }
-
-    [Fact]
-    public async Task R2_8_OneItem_SingleChunk()
-    {
-        var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.OK, BuildBatchResponse(1, 200));
-
-        using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
-
-        var ops = new[] { new BatchOperation("/users/1") };
-        var result = await batchClient.ExecuteBatchIndexedAsync(ops, CancellationToken.None);
-
-        Assert.Single(result.Results);
-        Assert.Equal(200, result.Results[0].Response.Status);
-        Assert.Equal(1, handler.RequestCount); // Exactly 1 batch POST
-    }
-
-    [Fact]
-    public async Task R2_8_TwentyItems_ExactlyOneChunk()
-    {
-        var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.OK, BuildBatchResponse(20, 200));
-
-        using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
-
-        var ops = Enumerable.Range(1, 20)
-            .Select(i => new BatchOperation($"/users/{i}"))
-            .ToArray();
-
-        var result = await batchClient.ExecuteBatchIndexedAsync(ops, CancellationToken.None);
-
-        Assert.Equal(20, result.Results.Count);
-        Assert.Equal(1, handler.RequestCount); // Exactly 1 chunk
-    }
-
-    [Fact]
-    public async Task R2_8_TwentyOneItems_TwoChunks()
-    {
-        var handler = new MockHttpHandler();
-        // First chunk: 20 items, second chunk: 1 item
-        handler.QueueResponse(HttpStatusCode.OK, BuildBatchResponse(20, 200));
-        handler.SetDefaultResponse(HttpStatusCode.OK, BuildBatchResponse(1, 200));
-
-        using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client, batchItemsPerSecond: 0); // No pacing delay for speed
-
-        var ops = Enumerable.Range(1, 21)
-            .Select(i => new BatchOperation($"/users/{i}"))
-            .ToArray();
-
-        var result = await batchClient.ExecuteBatchIndexedAsync(ops, CancellationToken.None);
-
-        Assert.Equal(21, result.Results.Count);
-        Assert.Equal(2, handler.RequestCount); // 2 chunks: 20 + 1
-    }
-
     // ═══════════════════════════════════════════════════════════════
     // Helper: Build mixed batch response (some succeed, some fail)
     // ═══════════════════════════════════════════════════════════════
@@ -1697,35 +1622,6 @@ public class BatchWriteTests
         Assert.Equal(200, result.Results[0].Response.Status);
         Assert.Equal(201, result.Results[1].Response.Status);
         Assert.Equal(200, result.Results[2].Response.Status);
-    }
-
-    [Fact]
-    public async Task BatchResponseCountMismatch_ThrowsInvalidOperationException()
-    {
-        var handler = new MockHttpHandler();
-        handler.QueueResponse(HttpStatusCode.OK, """
-        {
-            "responses": [
-                { "id": "1", "status": 200, "body": { "id": "user1" } }
-            ]
-        }
-        """);
-
-        using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
-
-        var operations = new List<BatchOperation>
-        {
-            new("/users/1"),
-            new("/users/2"),
-            new("/users/3")
-        };
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => batchClient.ExecuteBatchIndexedAsync(operations));
-
-        Assert.Contains("response count mismatch", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -16,7 +16,7 @@ namespace Mgx.IntegrationTests.Cmdlets;
 public class GetMgxOptionCoverageTests
 {
     [Fact]
-    public void ProcessRecord_ReturnsAllOptions()
+    public void Get_MgxOption_reports_the_options_the_session_is_running_with()
     {
         var handler = new StubHttpMessageHandler().EnqueueJson(HttpStatusCode.OK, """{"id":"1"}""");
         using var host = new MgxTestHost(handler);
@@ -26,26 +26,17 @@ public class GetMgxOptionCoverageTests
             ps.AddCommand("Get-MgxOption");
         });
 
-        Assert.NotNull(result.Output);
         Assert.Single(result.Output);
-
         var output = result.Output[0].BaseObject;
-        Assert.NotNull(output);
+        object? Value(string name) => output.GetType().GetProperty(name)!.GetValue(output);
 
-        var props = output.GetType().GetProperties();
-        Assert.Contains(props, p => p.Name == "RateLimitBurst");
-        Assert.Contains(props, p => p.Name == "RateLimitPerSecond");
-        Assert.Contains(props, p => p.Name == "NoRateLimit");
-        Assert.Contains(props, p => p.Name == "RateLimitQueueLimit");
-        Assert.Contains(props, p => p.Name == "MaxRetryAttempts");
-        Assert.Contains(props, p => p.Name == "MaxRetryAfterSeconds");
-        Assert.Contains(props, p => p.Name == "TotalTimeoutSeconds");
-        Assert.Contains(props, p => p.Name == "AttemptTimeoutSeconds");
-        Assert.Contains(props, p => p.Name == "CircuitBreakerDurationSeconds");
-        Assert.Contains(props, p => p.Name == "CircuitBreakerFailureRatio");
-        Assert.Contains(props, p => p.Name == "CircuitBreakerMinThroughput");
-        Assert.Contains(props, p => p.Name == "CircuitBreakerSamplingDurationSeconds");
-        Assert.Contains(props, p => p.Name == "BatchChunkConcurrency");
-        Assert.Contains(props, p => p.Name == "BatchItemsPerSecond");
+        // MgxTestHost applies FastOptions, so these are the values the cmdlet must report back
+        Assert.Equal(true, Value("NoRateLimit"));
+        Assert.Equal(2, Value("MaxRetryAttempts"));
+        Assert.Equal(10, Value("AttemptTimeoutSeconds"));
+        Assert.Equal(30, Value("TotalTimeoutSeconds"));
+        Assert.Equal(1000, Value("CircuitBreakerMinThroughput"));
+        Assert.Equal(1, Value("MaxRetryAfterSeconds"));
+        Assert.Equal(0, Value("BatchItemsPerSecond"));
     }
 }

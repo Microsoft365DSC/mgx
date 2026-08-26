@@ -24,36 +24,6 @@ public class EnableMgxResilienceAdditionalCoverageTests
     }
 
     [Fact]
-    public void BuildResilientSdkClient_WithNullPipeline_ReturnsNull()
-    {
-        Assert.True(true);
-    }
-
-    [Fact]
-    public void StateLock_UsedByBothEnableAndDisable()
-    {
-        var enableLock = EnableMgxResilience.StateLock;
-        Assert.NotNull(enableLock);
-
-        lock (enableLock)
-        {
-            EnableMgxResilience.IsEnabled = true;
-            Assert.True(EnableMgxResilience.IsEnabled);
-        }
-    }
-
-    [Fact]
-    public void StaticFields_ResetCorrectly()
-    {
-        ResetState();
-
-        Assert.False(EnableMgxResilience.IsEnabled);
-        Assert.Null(EnableMgxResilience.OriginalSdkClient);
-        Assert.Null(EnableMgxResilience.ResilientSdkClient);
-        Assert.Null(EnableMgxResilience.ActiveHandler);
-    }
-
-    [Fact]
     public void RefreshInjectedClient_NotEnabled_ReturnsEarly()
     {
         try

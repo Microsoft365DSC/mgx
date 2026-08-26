@@ -131,7 +131,9 @@ public class InvokeMgxRequestE2ETests(WireMockGraphFixture fixture)
         var result = host.Run(ps => ps.AddCommand("Invoke-MgxRequest").AddParameter("Uri", "/users/missing"));
 
         Assert.Empty(result.Output);
-        Assert.True(result.Errors.Count > 0 || result.Terminating != null);
+        // Non-terminating: the error is written to the stream, not thrown out of the pipeline
+        Assert.NotEmpty(result.Errors);
+        Assert.Null(result.Terminating);
     }
 
     [Fact]
@@ -203,7 +205,7 @@ public class InvokeMgxRequestE2ETests(WireMockGraphFixture fixture)
     }
 
     [Fact]
-    public async Task WhatIf_on_a_write_never_reaches_the_network_2()
+    public async Task WhatIf_on_a_POST_write_never_reaches_the_network()
     {
         RequiresDocker();
         await fixture.ResetAsync();

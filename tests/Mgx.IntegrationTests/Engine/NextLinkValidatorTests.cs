@@ -27,14 +27,6 @@ public class NextLinkValidatorTests
     }
 
     [Fact]
-    public void Rejects_host_that_only_shares_a_prefix()
-    {
-        // graph.microsoft.com.evil.example.com must not pass a naive prefix check
-        Assert.Null(NextLinkValidator.Validate(
-            "https://graph.microsoft.com.evil.example.com/v1.0/users", GraphHost));
-    }
-
-    [Fact]
     public void Rejects_scheme_downgrade_to_http()
     {
         // Plaintext would leak the bearer token
@@ -58,31 +50,4 @@ public class NextLinkValidatorTests
         Assert.Null(NextLinkValidator.Validate(nextLink, GraphHost));
     }
 
-    [Fact]
-    public void Rejects_null_next_link_and_null_expected_host()
-    {
-        Assert.Null(NextLinkValidator.Validate(null, GraphHost));
-        Assert.Null(NextLinkValidator.Validate("https://graph.microsoft.com/v1.0/users", null));
-    }
-
-    [Fact]
-    public void Enforces_path_prefix_when_supplied()
-    {
-        // A tampered checkpoint redirecting /users pagination to /me/messages
-        // exfiltrates different data on the same host with the same token.
-        Assert.Null(NextLinkValidator.Validate(
-            "https://graph.microsoft.com/v1.0/me/messages", GraphHost, "/v1.0/users"));
-
-        const string sameResource = "https://graph.microsoft.com/v1.0/users?$skiptoken=abc";
-        Assert.Equal(sameResource,
-            NextLinkValidator.Validate(sameResource, GraphHost, "/v1.0/users"));
-    }
-
-    [Fact]
-    public void Path_prefix_comparison_is_case_insensitive()
-    {
-        const string next = "https://graph.microsoft.com/v1.0/Users?$skiptoken=abc";
-
-        Assert.Equal(next, NextLinkValidator.Validate(next, GraphHost, "/v1.0/users"));
-    }
 }

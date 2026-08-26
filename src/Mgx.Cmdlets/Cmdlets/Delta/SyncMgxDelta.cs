@@ -110,11 +110,11 @@ public class SyncMgxDelta : MgxCmdletBase
             return;
         }
 
-        // Fail fast: validate delta file is writable before HTTP calls
+        // Validate the delta file is writable before any HTTP call
         var resolvedDeltaPath = GetUnresolvedProviderPathFromPSPath(DeltaPath);
         DeltaState.ValidateWriteAccess(resolvedDeltaPath);
 
-        // Validate -OutputFile writability before HTTP calls
+        // Validate -OutputFile is writable before any HTTP call
         string? resolvedOutputPath = null;
         if (OutputFile != null)
         {
@@ -129,8 +129,7 @@ public class SyncMgxDelta : MgxCmdletBase
             DeltaState.ValidateWriteAccess(resolvedOutputPath);
         }
 
-        // The checkpoint must not collide with either state file: sharing a path would
-        // corrupt both the position and the data it describes.
+        // The checkpoint must not share a path with either state file
         if (CheckpointPath != null)
         {
             var resolvedCheckpointPath = GetUnresolvedProviderPathFromPSPath(CheckpointPath);
@@ -151,7 +150,7 @@ public class SyncMgxDelta : MgxCmdletBase
             }
         }
 
-        // Warn if URI doesn't look like a delta endpoint
+        // Warn when the URI does not look like a delta endpoint
         if (!Uri.Contains("/delta", StringComparison.OrdinalIgnoreCase))
         {
             WriteWarning(
@@ -171,8 +170,8 @@ public class SyncMgxDelta : MgxCmdletBase
             ? GetUnresolvedProviderPathFromPSPath(CheckpointPath)
             : null;
 
-        // Handle -FullSync: delete existing delta state and any resume checkpoint - the
-        // position it describes belongs to the enumeration being discarded.
+        // -FullSync drops the state and any resume checkpoint, whose position belongs to the
+        // enumeration being discarded
         if (FullSync.IsPresent)
         {
             if (File.Exists(resolvedDeltaPath))
@@ -190,32 +189,26 @@ public class SyncMgxDelta : MgxCmdletBase
             DeleteCheckpoint(resolvedCheckpointPath, "full sync requested");
         }
 
-        // Normalize $select and Prefer for order-independent comparison
+        // Normalized so comparison is order-independent
         var normalizedSelect = NormalizeSelect(Property != null ? string.Join(",", Property) : null);
         var normalizedPrefer = NormalizeSelect(Prefer != null ? string.Join(",", Prefer) : null);
         var currentFilter = Filter;
         string requestUrl;
 
-        // LoadWithResult distinguishes "not found" from "corrupt".
-        // The endpoint-independent state checks run BEFORE GetClient() so their
-        // errors surface without requiring a Graph connection; the checks that
-        // compare against the session's endpoint run after it.
+        // LoadWithResult tells "not found" from "corrupt". The endpoint-independent checks run
+        // before GetClient so their errors surface without a Graph connection
         var (existingState, loadResult) = DeltaState.LoadWithResult(resolvedDeltaPath);
-        // -Latest means "baseline from now, return nothing". That is right for a first run and
-        // catastrophic after a state invalidation: the user is told a full re-sync is starting,
-        // gets zero items, and a fresh baseline token is persisted - so every change since the
-        // last successful sync is dropped permanently. The guard that warns "-Latest ignored"
-        // lives in the resume branch, which an invalidated state never reaches. Track it here
+        // -Latest baselines from now and returns nothing. That is right for a first run and
+        // wrong after a state invalidation, where it would drop every change since the last
+        // successful sync. The resume branch guard never sees an invalidated state, so track it
+        // here
         // and clear it wherever state is discarded.
         var honorLatest = Latest.IsPresent;
 
-        // A live resume checkpoint is not a fresh run either. Without delta state the guards
-        // below never fire, so -Latest was honored on top of an interrupted enumeration: the
-        // checkpoint is dropped a moment later as "a different enumeration" (the token=latest
-        // suffix changes requestUrl), the items the crashed run collected stay stranded in its
-        // temp, and an empty page still saves a from-now token - so everything before this
-        // moment is permanently unreachable. -FullSync deletes the checkpoint above, so
-        // "-FullSync -Latest" still re-baselines from now, which is what the warning below
+        // A live resume checkpoint is not a fresh run either. Honoring -Latest on top of an
+        // interrupted enumeration strands the items the crashed run collected and still saves a
+        // from-now token. -FullSync deletes the checkpoint above, so -FullSync -Latest still
+        // re-baselines, which is what the warning below
         // tells people to use.
         var hasResumableCheckpoint = resolvedCheckpointPath != null && File.Exists(resolvedCheckpointPath);
         if (honorLatest && hasResumableCheckpoint)
@@ -224,17 +217,16 @@ public class SyncMgxDelta : MgxCmdletBase
         if (loadResult == DeltaLoadResult.Corrupt)
         {
             WriteWarning($"Delta state file '{DeltaPath}' is corrupt. Starting full sync.");
-            // A corrupt state means the previous position is unknown, which is exactly when
-            // baselining from now would hide the most: everything since the last good sync.
+            // A corrupt state means the previous position is unknown, which is when baselining
+            // from now would hide the most
             honorLatest = false;
         }
 
         if (existingState != null)
         {
-            // The deltaLink is absolute and carries its own version, so a run that omits
-            // -ApiVersion silently keeps syncing whichever version built the state - the
-            // caller believes they are on the default and are not. Empty means a pre-2.0.1
-            // state file: unknown, not mismatched, so upgrades are not broken by this check.
+            // The deltaLink carries its own version, so a run omitting -ApiVersion would keep
+            // syncing whichever version built the state. Empty means an older state file, which
+            // is unknown rather than mismatched
             if (!string.IsNullOrEmpty(existingState.ApiVersion)
                 && !string.Equals(existingState.ApiVersion, ApiVersion, StringComparison.OrdinalIgnoreCase))
             {
@@ -259,7 +251,7 @@ public class SyncMgxDelta : MgxCmdletBase
                 return;
             }
 
-            // Normalized $select comparison (order-independent, deduplicated)
+            // Order-independent and deduplicated
             var storedSelect = NormalizeSelect(existingState.Select);
             if (!string.Equals(storedSelect, normalizedSelect, StringComparison.OrdinalIgnoreCase))
             {
@@ -274,8 +266,8 @@ public class SyncMgxDelta : MgxCmdletBase
                 honorLatest = false;  // a discarded state is not a fresh run
             }
 
-            // Detect Prefer change between runs: the tokens shape what the enumeration
-            // returns (removed facets, sharing annotations), so mixing states is unsound.
+            // Prefer tokens shape what the enumeration returns, so mixing states across a change
+            // is unsound
             if (existingState != null)
             {
                 var storedPrefer = NormalizeSelect(existingState.Prefer);
@@ -309,12 +301,9 @@ public class SyncMgxDelta : MgxCmdletBase
             }
         }
 
-        // GetClient() sits between the two validation halves on purpose. It runs after the
-        // state-file checks above so their errors surface without a Graph connection, and
-        // before everything below because it is the only thing that refreshes s_graphEndpoint
-        // from the session: on the first call of a session the endpoint comparison and the
-        // request URL would otherwise be built against the default endpoint instead of the
-        // connected one. Invoke-MgxRequest sequences GetClient() first for the same reason.
+        // GetClient sits between the two validation halves. It runs after the state-file checks
+        // so their errors need no Graph connection, and before the rest because it is the only
+        // thing that refreshes s_graphEndpoint from the session
         var client = GetClient();
 
         if (existingState != null)
@@ -331,7 +320,7 @@ public class SyncMgxDelta : MgxCmdletBase
                 return;
             }
 
-            // SSRF validation: deltaLink is untrusted (from a file on disk)
+            // The deltaLink comes from a file on disk and is untrusted
             var deltaUri = new System.Uri(s_graphEndpoint);
             var validated = NextLinkValidator.Validate(existingState.DeltaLink, deltaUri);
             if (validated == null)
@@ -344,13 +333,10 @@ public class SyncMgxDelta : MgxCmdletBase
                 return;
             }
 
-            // Resource path validation: verify the deltaLink's path contains the expected
-            // resource. Prevents a tampered delta file from redirecting queries to a different
-            // Graph resource (e.g., /me/messages instead of /users/delta).
-            // Compare paths to paths. NormalizePath keeps any query, while AbsolutePath never
-            // has one, so "/users/delta?$select=id" - the shape Microsoft's delta docs show -
-            // guaranteed a mismatch: run 1 saved state, run 2 died with a SecurityError accusing
-            // that state file of tampering. A trailing slash failed identically.
+            // Verify the deltaLink path contains the expected resource, so a tampered state file
+            // cannot redirect the query to another Graph resource.
+            // Compare paths to paths. NormalizePath keeps any query while AbsolutePath never has
+            // one, so a -Uri carrying $select or a trailing slash would always mismatch
             var expectedPath = NormalizePath(Uri).Split('?')[0].TrimEnd('/');
             if (System.Uri.TryCreate(validated, UriKind.Absolute, out var parsedDelta)
                 && !parsedDelta.AbsolutePath.TrimEnd('/')
@@ -392,9 +378,9 @@ public class SyncMgxDelta : MgxCmdletBase
             }
             else if (honorLatest)
             {
-                // "Sync from now": returns an empty page plus a deltaLink; the existing
-                // empty-page-still-saves-token path persists the baseline. The token form
-                // differs by service: OneDrive/SharePoint take token=latest, directory and
+                // Sync from now returns an empty page plus a deltaLink, and the empty-page path
+                // persists the baseline. The token form differs by service: OneDrive and
+                // SharePoint take token=latest, directory and
                 // everything else $deltatoken=latest.
                 var tokenParam = AdaptivePacing.Classify(Uri) == WorkloadBucket.Drive
                     ? "token=latest"
@@ -486,8 +472,8 @@ public class SyncMgxDelta : MgxCmdletBase
             if (TryPromoteNamedTemp(outputPath, checkpoint.TempFile, dataLength))
             {
                 WriteWarning($"Recovered {checkpoint.ItemsCollected} items from an interrupted sync's temp file. Resuming from checkpoint.");
-                // Those items are the output now. Repoint the checkpoint at it immediately,
-                // so a second interruption cannot promote the same temp a second time.
+                // Those items are the output now, so repoint the checkpoint at it immediately or a
+                // second interruption promotes the same temp twice
                 checkpoint.TempFile = null;
                 checkpoint.DataLength = new FileInfo(outputPath).Length;
                 try { checkpoint.Save(checkpointPath); }
@@ -534,8 +520,7 @@ public class SyncMgxDelta : MgxCmdletBase
                 var headers = BuildRequestHeaders(null, Headers);
                 if (Prefer is { Length: > 0 })
                 {
-                    // Dedicated parameter wins over a Prefer key in -Headers (matches the
-                    // ConsistencyLevel convention in BuildRequestHeaders).
+                    // The dedicated parameter wins over a Prefer key in -Headers
                     headers ??= new Dictionary<string, string>();
                     headers["Prefer"] = string.Join(",", Prefer);
                 }
@@ -548,20 +533,18 @@ public class SyncMgxDelta : MgxCmdletBase
 
                 if (checkpointPath != null && File.Exists(checkpointPath))
                 {
-                    // JSONL crash: the checkpoint survives but the output was never promoted from
-                    // its temp file. Promote the temp (trimmed to the checkpointed length) so
-                    // resume appends to real data instead of declaring staleness. Without this
-                    // the resume restarts at checkpoint.NextLink and the crashed run's items,
-                    // sitting only in the temp, are never emitted - while the delta token
+                    // The checkpoint survived but the output was never promoted from its temp.
+                    // Promote the temp, trimmed to the checkpointed length, so resume appends to
+                    // real data. Otherwise the crashed run items stay in the temp and are never
+                    // emitted, while the delta token
                     // advances past them on success.
                     if (outputPath != null)
                     {
                         var orphanCp = PaginationCheckpoint.Load(checkpointPath);
 
-                        // The resource is checked before anything is merged. The temp glob is
-                        // shaped from the output path, so a checkpoint belonging to a different
-                        // enumeration must never be allowed to pull a file into this one. The
-                        // mismatch itself is handled a few lines below; here we only decline.
+                        // The temp glob is shaped from the output path, so a checkpoint from a
+                        // different enumeration must not pull a file into this one. The mismatch
+                        // itself is handled below, here we only decline
                         var resourceMatches = orphanCp != null
                             && string.Equals(orphanCp.Resource, requestUrl, StringComparison.Ordinal);
 
@@ -593,7 +576,7 @@ public class SyncMgxDelta : MgxCmdletBase
                         }
                         else
                         {
-                            // SSRF validation: the checkpoint nextLink is untrusted (a file on disk)
+                            // The checkpoint nextLink comes from a file on disk and is untrusted
                             var expectedHost = new System.Uri(requestUrl);
                             var validatedLink = NextLinkValidator.Validate(checkpoint.NextLink, expectedHost);
                             if (validatedLink != null
@@ -626,10 +609,9 @@ public class SyncMgxDelta : MgxCmdletBase
                 long itemCount = 0;
                 long removedCount = 0;
                 long totalProcessed = resumedItemCount;
-                // Seeded from the resume skip, not 0. PageIterator drops the skipped items before
-                // the consumer ever sees them (PageIterator.cs: "if (isFirstPage && skippedOnPage
-                // < skipOnFirstPage) continue;"), so a counter starting at 0 records only the
-                // NEWLY written items of the first resumed page. A mid-page checkpoint there then
+                // Seeded from the resume skip, not zero. PageIterator drops skipped items before
+                // the consumer sees them, so a counter starting at zero would record only the
+                // newly written items of the first resumed page. A mid-page checkpoint there then
                 // claimed fewer items of that page than the output actually held, and the next
                 // resume skipped too few and re-emitted the difference - up to a page's worth of
                 // duplicate lines, which is exactly what the comment below says cannot happen.

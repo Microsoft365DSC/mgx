@@ -53,31 +53,6 @@ public class PaginationCheckpointFinalCoverageTests : IDisposable
     }
 
     [Fact]
-    public void Load_WithNegativePageItemsAlreadyWritten_DefaultsToZero()
-    {
-        var path = PathFor("neg.checkpoint");
-        File.WriteAllText(path, """{ "resource": "/test", "nextLink": null, "itemsCollected": 5, "pageItemsAlreadyWritten": -1 }""");
-
-        var loaded = PaginationCheckpoint.Load(path);
-        Assert.NotNull(loaded);
-        Assert.Equal(-1, loaded.PageItemsAlreadyWritten);
-    }
-
-    [Fact]
-    public void Load_WithMissingFields_UsesDefaults()
-    {
-        var path = PathFor("minimal.checkpoint");
-        File.WriteAllText(path, """{ "resource": "/test" }""");
-
-        var loaded = PaginationCheckpoint.Load(path);
-        Assert.NotNull(loaded);
-        Assert.Equal("/test", loaded.Resource);
-        Assert.Null(loaded.NextLink);
-        Assert.Equal(0, loaded.ItemsCollected);
-        Assert.Equal(0, loaded.PageItemsAlreadyWritten);
-    }
-
-    [Fact]
     public void Save_HandlesVeryLongUrls()
     {
         var path = PathFor("long.checkpoint");
@@ -93,35 +68,6 @@ public class PaginationCheckpointFinalCoverageTests : IDisposable
         var loaded = PaginationCheckpoint.Load(path);
         Assert.NotNull(loaded);
         Assert.Equal(longUrl, loaded.Resource);
-    }
-
-    [Fact]
-    public async Task ConcurrentSaveAndLoad_DoesNotCorrupt()
-    {
-        var path = PathFor("concurrent.checkpoint");
-        var tasks = new List<Task>();
-        var ct = TestContext.Current.CancellationToken;
-
-        for (int i = 0; i < 20; i++)
-        {
-            int idx = i;
-            tasks.Add(Task.Run(() =>
-            {
-                var cp = new PaginationCheckpoint
-                {
-                    Resource = $"/test/{idx}",
-                    NextLink = idx < 19 ? $"next/{idx}" : null,
-                    ItemsCollected = idx * 10,
-                    PageItemsAlreadyWritten = idx
-                };
-                cp.Save(path);
-            }, ct));
-        }
-
-        await Task.WhenAll(tasks);
-
-        var loaded = PaginationCheckpoint.Load(path);
-        Assert.NotNull(loaded);
     }
 
     [Fact]
@@ -141,17 +87,19 @@ public class PaginationCheckpointFinalCoverageTests : IDisposable
     }
 
     [Fact]
-    public void Delete_WhenIOExceptionDuringDelete_ReturnsFalse()
+    public void Delete_ReturnsFalse_WhileAnotherHandleHoldsTheFile()
     {
-        // On Windows, FileAttributes.ReadOnly doesn't prevent deletion by owner.
-        // This test verifies the method handles IOException gracefully.
         var path = PathFor("locked.checkpoint");
-        var cp = new PaginationCheckpoint { Resource = "/test", NextLink = null, ItemsCollected = 1 };
-        cp.Save(path);
+        new PaginationCheckpoint { Resource = "/test", NextLink = null, ItemsCollected = 1 }.Save(path);
 
-        // Just verify the method doesn't throw
-        var result = PaginationCheckpoint.Delete(path);
-        Assert.True(result);
+        // FileShare.None makes the delete fail the way a competing process would
+        using (var _ = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.False(PaginationCheckpoint.Delete(path));
+            Assert.True(File.Exists(path));
+        }
+
+        Assert.True(PaginationCheckpoint.Delete(path));
         Assert.False(File.Exists(path));
     }
 

@@ -76,39 +76,6 @@ public class ExpandMgxRelationCoverageTests
     }
 
     [Fact]
-    public void ExecuteFanOut_MissingIdProperty_WritesErrorAndContinues()
-    {
-        var handler = new StubHttpMessageHandler().EnqueueJson(HttpStatusCode.OK, """{"id":"mgr1"}""");
-        using var host = new MgxTestHost(handler);
-
-        var input = new[]
-        {
-            new Hashtable { ["displayName"] = "User 1" },
-            new Hashtable { ["id"] = "2", ["displayName"] = "User 2" }
-        };
-
-        var result = host.Run(ps =>
-        {
-            ps.AddCommand("Expand-MgxRelation")
-                .AddParameter("Uri", "/users/{id}/manager")
-                .AddParameter("As", "manager");
-        }, input);
-
-        // This test may hit NotConnected - if so skip
-        if (result.Terminating != null)
-        {
-            if (result.Terminating.FullyQualifiedErrorId.Contains("NotConnected", StringComparison.OrdinalIgnoreCase))
-            {
-                Assert.True(true, "Test requires GraphSession which is not available in test environment");
-                return;
-            }
-        }
-
-        Assert.Equal(2, result.Output.Count);
-        Assert.NotNull(result.Errors.FirstOrDefault(e => e.FullyQualifiedErrorId.Contains("MissingIdProperty")));
-    }
-
-    [Fact]
     public void BuildUrl_ReplacesIdPlaceholder()
     {
         var cmdlet = new ExpandMgxRelation

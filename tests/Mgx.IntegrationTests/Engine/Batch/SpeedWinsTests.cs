@@ -169,13 +169,6 @@ public class SpeedWinsTests
             new ResilientGraphClientOptions { BatchChunkConcurrency = 11 });
     }
 
-    [Fact]
-    public void BatchChunkConcurrency_DefaultIs1()
-    {
-        var options = new ResilientGraphClientOptions();
-        Assert.Equal(1, options.BatchChunkConcurrency);
-    }
-
     private static string BuildBatchResponse(int count, int status)
     {
         var items = string.Join(",\n",

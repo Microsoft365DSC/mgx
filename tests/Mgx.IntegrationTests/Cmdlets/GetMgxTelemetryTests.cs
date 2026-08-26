@@ -15,7 +15,7 @@ namespace Mgx.IntegrationTests.Cmdlets;
 public class GetMgxTelemetryTests
 {
     [Fact]
-    public void ProcessRecord_ReturnsTelemetryOutputWithAllProperties()
+    public void RecordRequest_Success_SummaryReflectsCounts()
     {
         MgxTelemetryCollector.Current.Reset();
         MgxTelemetryCollector.Current.RecordRequest(true, 0);
@@ -53,7 +53,7 @@ public class GetMgxTelemetryTests
     }
 
     [Fact]
-    public void ProcessRecord_WithReset_ClearsTelemetry()
+    public void Reset_ClearsRequestAndOutcomeCounters()
     {
         MgxTelemetryCollector.Current.Reset();
         MgxTelemetryCollector.Current.RecordRequest(true, 0);
@@ -68,7 +68,7 @@ public class GetMgxTelemetryTests
     }
 
     [Fact]
-    public void ProcessRecord_RecordsThrottleRetries()
+    public void RecordRetry_Throttle_IncrementsThrottleRetriesAndDelay()
     {
         MgxTelemetryCollector.Current.Reset();
         MgxTelemetryCollector.Current.RecordRetry(isThrottle: true, delayMs: 100);
@@ -81,7 +81,7 @@ public class GetMgxTelemetryTests
     }
 
     [Fact]
-    public void ProcessRecord_RecordsOtherRetries()
+    public void RecordRetry_NonThrottle_IncrementsOtherRetriesAndDelay()
     {
         MgxTelemetryCollector.Current.Reset();
         MgxTelemetryCollector.Current.RecordRetry(isThrottle: false, delayMs: 50);
@@ -93,7 +93,7 @@ public class GetMgxTelemetryTests
     }
 
     [Fact]
-    public void ProcessRecord_RecordsCircuitBreakerTrips()
+    public void RecordCircuitBreakerTrip_IncrementsTripCounter()
     {
         MgxTelemetryCollector.Current.Reset();
         MgxTelemetryCollector.Current.RecordCircuitBreakerTrip();
@@ -105,7 +105,7 @@ public class GetMgxTelemetryTests
     }
 
     [Fact]
-    public void ProcessRecord_RecordsBatchItemThrottles()
+    public void RecordBatchItemThrottles_AddsToCounter()
     {
         MgxTelemetryCollector.Current.Reset();
         MgxTelemetryCollector.Current.RecordBatchItemThrottles(5);

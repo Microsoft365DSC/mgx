@@ -34,13 +34,6 @@ public class ExportMgxCollectionTests
     }
 
     [Fact]
-    public void ProcessRecord_FilterAutoAddsConsistencyLevel()
-    {
-        // This test requires GraphSession to execute - tested in E2ETests with WireMock
-        Assert.True(true);
-    }
-
-    [Fact]
     public void ProcessRecord_CheckpointPathEqualsOutputFile_ThrowsError()
     {
         var tempFile = Path.GetTempFileName();

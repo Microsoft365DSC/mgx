@@ -41,55 +41,6 @@ public class InvokeMgxBatchRequestTests
     }
 
     [Fact]
-    public void ParsePipelineInput_StringUrl_UsesSharedMethod()
-    {
-        var cmdlet = new InvokeMgxBatchRequest { Method = "POST" };
-
-        var parsed = cmdlet.ParsePipelineInput("/users/123");
-
-        Assert.NotNull(parsed);
-        Assert.Equal("/users/123", parsed.Url);
-        Assert.Equal("POST", parsed.Method);
-        Assert.Null(parsed.Body);
-    }
-
-    [Fact]
-    public void ParsePipelineInput_HashtableWithUrlMethodBody_ParsesAll()
-    {
-        var cmdlet = new InvokeMgxBatchRequest { Method = "GET" };
-        var item = new Hashtable(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Url"] = "/users",
-            ["Method"] = "post",
-            ["Body"] = new Hashtable { ["displayName"] = "Test" }
-        };
-
-        var parsed = cmdlet.ParsePipelineInput(item);
-
-        Assert.NotNull(parsed);
-        Assert.Equal("/users", parsed.Url);
-        Assert.Equal("POST", parsed.Method);
-        Assert.NotNull(parsed.Body);
-    }
-
-    [Fact]
-    public void ParsePipelineInput_PSCustomObjectWithUrlMethodBody_ParsesAll()
-    {
-        var cmdlet = new InvokeMgxBatchRequest { Method = "GET" };
-        var pso = new PSObject();
-        pso.Properties.Add(new PSNoteProperty("Url", "/groups"));
-        pso.Properties.Add(new PSNoteProperty("Method", "PATCH"));
-        pso.Properties.Add(new PSNoteProperty("Body", new Hashtable { ["description"] = "Test" }));
-
-        var parsed = cmdlet.ParsePipelineInput(pso);
-
-        Assert.NotNull(parsed);
-        Assert.Equal("/groups", parsed.Url);
-        Assert.Equal("PATCH", parsed.Method);
-        Assert.NotNull(parsed.Body);
-    }
-
-    [Fact]
     public void NormalizeToRelativeUrl_HandlesAbsoluteUrl()
     {
         var cmdlet = new InvokeMgxBatchRequest { ApiVersion = "v1.0" };
@@ -113,15 +64,4 @@ public class InvokeMgxBatchRequestTests
         Assert.Equal("/groups/123", url);
     }
 
-    [Fact]
-    public void RedactSensitiveFields_RedactsClientSecret()
-    {
-        var cmdlet = new InvokeMgxBatchRequest();
-        var json = JsonNode.Parse("""{"clientSecret":"secret","appPassword":"secret"}""");
-        var obj = json!.AsObject();
-        InvokeMethod<object>(cmdlet, "RedactSensitiveFields", json);
-
-        Assert.Equal("***REDACTED***", obj["clientSecret"]!.GetValue<string>());
-        Assert.Equal("***REDACTED***", obj["appPassword"]!.GetValue<string>());
-    }
 }

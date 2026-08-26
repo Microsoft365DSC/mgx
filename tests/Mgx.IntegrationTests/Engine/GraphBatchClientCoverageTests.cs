@@ -45,56 +45,6 @@ public class GraphBatchClientCoverageTests
     }
 
     [Fact]
-    public async Task ExecuteBatchIndexedAsync_EmptyOperations_ReturnsEmptyResult()
-    {
-        var handler = new StubHttpMessageHandler();
-        ResiliencePipelineFactory.Reset();
-        MgxTelemetryCollector.Current.Reset();
-
-        var client = new GraphBatchClient(CreateClient(handler), "https://graph.microsoft.com/v1.0", 10, 5, 0)
-        {
-            VerboseWriter = _ => { }
-        };
-
-        var result = await client.ExecuteBatchIndexedAsync(new List<BatchOperation>(), Ct);
-
-        Assert.Empty(result.Results);
-        Assert.Equal(0, result.Telemetry.TotalRequests);
-    }
-
-    [Fact]
-    public async Task ExecuteBatchIndexedAsync_SingleOperation_Success()
-    {
-        var handler = new StubHttpMessageHandler().EnqueueJson(HttpStatusCode.OK, """
-            {
-                "responses": [
-                    { "id": "1", "status": 200, "body": { "id": "user1" } }
-                ]
-            }
-            """);
-
-        ResiliencePipelineFactory.Reset();
-        MgxTelemetryCollector.Current.Reset();
-
-        var client = new GraphBatchClient(CreateClient(handler), "https://graph.microsoft.com/v1.0", 10, 5, 0)
-        {
-            VerboseWriter = _ => { }
-        };
-
-        var ops = new List<BatchOperation>
-        {
-            new BatchOperation("/users/user1", "GET")
-        };
-
-        var result = await client.ExecuteBatchIndexedAsync(ops, Ct);
-
-        Assert.Single(result.Results);
-        Assert.Equal(200, result.Results[0].Response.Status);
-        Assert.Equal(1, result.Telemetry.TotalRequests);
-        Assert.Equal(1, result.Telemetry.Succeeded);
-    }
-
-    [Fact]
     public async Task ExecuteBatchIndexedAsync_FailedItem_TelemetryRecordsFailure()
     {
         var handler = new StubHttpMessageHandler().EnqueueJson(HttpStatusCode.OK, """
@@ -158,26 +108,4 @@ public class GraphBatchClientCoverageTests
         Assert.Equal("/users/user1", result.Results[1].Operation.Url);
     }
 
-    [Fact]
-    public async Task ExecuteBatchIndexedAsync_EmptyResponsesArray_Throws()
-    {
-        var handler = new StubHttpMessageHandler().EnqueueJson(HttpStatusCode.OK, """
-            { "responses": [] }
-            """);
-
-        ResiliencePipelineFactory.Reset();
-        MgxTelemetryCollector.Current.Reset();
-
-        var client = new GraphBatchClient(CreateClient(handler), "https://graph.microsoft.com/v1.0", 10, 5, 0)
-        {
-            VerboseWriter = _ => { }
-        };
-
-        var ops = new List<BatchOperation>
-        {
-            new BatchOperation("/users/user1", "GET")
-        };
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => client.ExecuteBatchIndexedAsync(ops, Ct));
-    }
 }

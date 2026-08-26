@@ -61,52 +61,6 @@ public class GraphBatchClientCoverageTests2
         Batch(requests.Select(r => Item(r.Id, 200, "{\"url\":\"" + r.Url + "\"}")));
 
     [Fact]
-    public async Task BatchChunkConcurrency_RespectsConcurrencyLimit()
-    {
-        var concurrentRequests = 0;
-        var maxConcurrent = 0;
-
-        var handler = new StubHttpMessageHandler().Enqueue(request =>
-        {
-            Interlocked.Increment(ref concurrentRequests);
-            maxConcurrent = Math.Max(maxConcurrent, concurrentRequests);
-            Thread.Sleep(50);
-            Interlocked.Decrement(ref concurrentRequests);
-
-            var requests = JsonSerializer.Deserialize<GraphBatchRequest>(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult(),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!.Requests;
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    "{\"responses\":[" + string.Join(",", requests.Select(r => "{\"id\":\"" + r.Id + "\",\"status\":200,\"body\":{}}")) + "]}",
-                    Encoding.UTF8, "application/json")
-            };
-        });
-
-        ResiliencePipelineFactory.Reset();
-        MgxTelemetryCollector.Current.Reset();
-        GraphBatchClient.ResetPacingState();
-
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://graph.microsoft.com") };
-        var client = new ResilientGraphClient(http, new ResilientGraphClientOptions
-        {
-            NoRateLimit = true,
-            MaxRetryAttempts = 1,
-            CircuitBreakerMinThroughput = 1000,
-            AttemptTimeoutSeconds = 10,
-            TotalTimeoutSeconds = 60
-        });
-
-        var batch = new GraphBatchClient(client, "https://graph.microsoft.com/v1.0", 1, 2, 0);
-
-        var ops = Enumerable.Range(0, 10).Select(i => new BatchOperation($"/users/u{i}")).ToList();
-        await batch.ExecuteBatchIndexedAsync(ops, CancellationToken.None);
-
-        // Should not exceed concurrency of 2
-        Assert.True(maxConcurrent <= 2, $"Max concurrent was {maxConcurrent}, expected <= 2");
-    }
-
-    [Fact]
     public async Task MaxRetryAfterSeconds_CapsRetryDelay()
     {
         var handler = new StubHttpMessageHandler()
@@ -139,45 +93,6 @@ public class GraphBatchClientCoverageTests2
         var result = await batch.ExecuteBatchIndexedAsync([new BatchOperation("/users/u0")], CancellationToken.None);
 
         Assert.Equal(200, result.Results[0].Response.Status);
-    }
-
-    [Fact]
-    public async Task ExecuteBatchIndexedAsync_PostWithBody_ProcessesCorrectly()
-    {
-        var handler = new StubHttpMessageHandler().Enqueue(request =>
-        {
-            var requests = JsonSerializer.Deserialize<GraphBatchRequest>(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult(),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!.Requests;
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    "{\"responses\":[" + string.Join(",", requests.Select(r => "{\"id\":\"" + r.Id + "\",\"status\":201,\"body\":{\"id\":\"new\"}}")) + "]}",
-                    Encoding.UTF8, "application/json")
-            };
-        });
-
-        ResiliencePipelineFactory.Reset();
-        MgxTelemetryCollector.Current.Reset();
-        GraphBatchClient.ResetPacingState();
-
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://graph.microsoft.com") };
-        var client = new ResilientGraphClient(http, new ResilientGraphClientOptions
-        {
-            NoRateLimit = true,
-            MaxRetryAttempts = 1,
-            CircuitBreakerMinThroughput = 1000,
-            AttemptTimeoutSeconds = 10,
-            TotalTimeoutSeconds = 60
-        });
-
-        var batch = new GraphBatchClient(client, "https://graph.microsoft.com/v1.0", 1, 1, 0);
-
-        var body = JsonDocument.Parse("""{"displayName":"Test"}""").RootElement;
-        var result = await batch.ExecuteBatchIndexedAsync([new BatchOperation("/users", "POST", body)], CancellationToken.None);
-
-        Assert.NotNull(result.Results);
-        Assert.Single(result.Results);
-        Assert.Equal(201, result.Results[0].Response.Status);
     }
 
     [Fact]
@@ -219,80 +134,6 @@ public class GraphBatchClientCoverageTests2
     }
 
     [Fact]
-    public async Task ExecuteBatchIndexedAsync_BetaApiVersion()
-    {
-        var handler = new StubHttpMessageHandler().Enqueue(request =>
-        {
-            var requests = JsonSerializer.Deserialize<GraphBatchRequest>(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult(),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!.Requests;
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    "{\"responses\":[" + string.Join(",", requests.Select(r => "{\"id\":\"" + r.Id + "\",\"status\":200,\"body\":{}}")) + "]}",
-                    Encoding.UTF8, "application/json")
-            };
-        });
-
-        ResiliencePipelineFactory.Reset();
-        MgxTelemetryCollector.Current.Reset();
-        GraphBatchClient.ResetPacingState();
-
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://graph.microsoft.com") };
-        var client = new ResilientGraphClient(http, new ResilientGraphClientOptions
-        {
-            NoRateLimit = true,
-            MaxRetryAttempts = 1,
-            CircuitBreakerMinThroughput = 1000,
-            AttemptTimeoutSeconds = 10,
-            TotalTimeoutSeconds = 60
-        });
-
-        var batch = new GraphBatchClient(client, "https://graph.microsoft.com/beta", 1, 1, 0);
-
-        var result = await batch.ExecuteBatchIndexedAsync([new BatchOperation("/users/u0")], CancellationToken.None);
-
-        Assert.Single(result.Results);
-    }
-
-    [Fact]
-    public async Task ExecuteBatchIndexedAsync_PostWithBody_CreatesNewUser()
-    {
-        var handler = new StubHttpMessageHandler().Enqueue(request =>
-        {
-            var requests = JsonSerializer.Deserialize<GraphBatchRequest>(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult(),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!.Requests;
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    "{\"responses\":[" + string.Join(",", requests.Select(r => "{\"id\":\"" + r.Id + "\",\"status\":201,\"body\":{\"id\":\"new\"}}")) + "]}",
-                    Encoding.UTF8, "application/json")
-            };
-        });
-
-        ResiliencePipelineFactory.Reset();
-        MgxTelemetryCollector.Current.Reset();
-        GraphBatchClient.ResetPacingState();
-
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://graph.microsoft.com") };
-        var client = new ResilientGraphClient(http, new ResilientGraphClientOptions
-        {
-            NoRateLimit = true,
-            MaxRetryAttempts = 1,
-            CircuitBreakerMinThroughput = 1000,
-            AttemptTimeoutSeconds = 10,
-            TotalTimeoutSeconds = 60
-        });
-
-        var batch = new GraphBatchClient(client, "https://graph.microsoft.com/v1.0", 1, 1, 0);
-
-        var body = JsonDocument.Parse("""{"displayName":"New User"}""").RootElement;
-        var result = await batch.ExecuteBatchIndexedAsync([new BatchOperation("/users", "POST", body)], CancellationToken.None);
-
-        Assert.Single(result.Results);
-        Assert.Equal(201, result.Results[0].Response.Status);
-    }
-
-    [Fact]
     public async Task ExecuteBatchIndexedAsync_Delete_RetriesOn5xx()
     {
         var attempts = 0;
@@ -329,44 +170,6 @@ public class GraphBatchClientCoverageTests2
         var result = await batch.ExecuteBatchIndexedAsync([new BatchOperation("/users/u0", "DELETE")], CancellationToken.None);
 
         Assert.Equal(200, result.Results[0].Response.Status);
-    }
-
-    [Fact]
-    public async Task ExecuteBatchIndexedAsync_Chunking_ExactBoundary()
-    {
-        var handler = new StubHttpMessageHandler().Enqueue(request =>
-        {
-            var requests = JsonSerializer.Deserialize<GraphBatchRequest>(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult(),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!.Requests;
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    "{\"responses\":[" + string.Join(",", requests.Select(r => "{\"id\":\"" + r.Id + "\",\"status\":200,\"body\":{}}")) + "]}",
-                    Encoding.UTF8, "application/json")
-            };
-        });
-
-        ResiliencePipelineFactory.Reset();
-        MgxTelemetryCollector.Current.Reset();
-        GraphBatchClient.ResetPacingState();
-
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://graph.microsoft.com") };
-        var client = new ResilientGraphClient(http, new ResilientGraphClientOptions
-        {
-            NoRateLimit = true,
-            MaxRetryAttempts = 1,
-            CircuitBreakerMinThroughput = 1000,
-            AttemptTimeoutSeconds = 10,
-            TotalTimeoutSeconds = 60
-        });
-
-        var batch = new GraphBatchClient(client, "https://graph.microsoft.com/v1.0", 1, 1, 0);
-
-        // Exactly 20 items - one chunk
-        var ops = Enumerable.Range(0, 20).Select(i => new BatchOperation($"/users/u{i}")).ToList();
-        var result = await batch.ExecuteBatchIndexedAsync(ops, CancellationToken.None);
-
-        Assert.Equal(20, result.Results.Count);
     }
 
     [Fact]

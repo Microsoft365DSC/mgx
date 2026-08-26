@@ -11,38 +11,6 @@ namespace Mgx.IntegrationTests;
 public class TransportConfigTests
 {
     [Fact]
-    public void TransportDefaults_ConnectTimeout_Is10Seconds()
-    {
-        Assert.Equal(TimeSpan.FromSeconds(10), TransportDefaults.ConnectTimeout);
-    }
-
-    [Fact]
-    public void TransportDefaults_PooledConnectionLifetime_Is2Minutes()
-    {
-        Assert.Equal(TimeSpan.FromMinutes(2), TransportDefaults.PooledConnectionLifetime);
-    }
-
-    [Fact]
-    public void TransportDefaults_MaxConnectionsPerServer_Is20()
-    {
-        Assert.Equal(20, TransportDefaults.MaxConnectionsPerServer);
-    }
-
-    [Fact]
-    public void TransportDefaults_EnableMultipleHttp2Connections_IsTrue()
-    {
-        Assert.True(TransportDefaults.EnableMultipleHttp2Connections);
-    }
-
-    [Fact]
-    public void TransportDefaults_Decompression_IncludesGZipDeflateAndBrotli()
-    {
-        Assert.True(TransportDefaults.Decompression.HasFlag(DecompressionMethods.GZip));
-        Assert.True(TransportDefaults.Decompression.HasFlag(DecompressionMethods.Deflate));
-        Assert.True(TransportDefaults.Decompression.HasFlag(DecompressionMethods.Brotli));
-    }
-
-    [Fact]
     public void SocketsHttpHandler_AcceptsTransportDefaults()
     {
         // Verify SocketsHttpHandler can be constructed with all TransportDefaults values.
@@ -63,9 +31,15 @@ public class TransportConfigTests
         Assert.Equal(TransportDefaults.Decompression, handler.AutomaticDecompression);
     }
 
+
     [Fact]
-    public void MaxRetryAfterSeconds_Is120()
+    public void TransportDefaults_PinTheShippedValues()
     {
+        // These are documented in about_Mgx_Tuning, so a silent change here changes shipped behavior
+        Assert.Equal(TimeSpan.FromSeconds(10), TransportDefaults.ConnectTimeout);
+        Assert.Equal(TimeSpan.FromMinutes(2), TransportDefaults.PooledConnectionLifetime);
+        Assert.Equal(20, TransportDefaults.MaxConnectionsPerServer);
+        Assert.True(TransportDefaults.EnableMultipleHttp2Connections);
         Assert.Equal(120, ResilientGraphClientOptions.Default.MaxRetryAfterSeconds);
     }
 }

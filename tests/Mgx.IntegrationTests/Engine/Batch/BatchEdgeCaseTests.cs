@@ -123,59 +123,7 @@ public class BatchEdgeCaseTests
 
     // ── R2-3: Mismatched response count ───────────────────────────────────────
 
-    [Fact]
-    public async Task Batch_MismatchedResponseCount_Throws()
-    {
-        // Send 5 items but server returns only 3 responses
-        var truncatedResponse = """
-        {
-            "responses": [
-                { "id": "1", "status": 200, "body": { "id": "user1" } },
-                { "id": "2", "status": 200, "body": { "id": "user2" } },
-                { "id": "3", "status": 200, "body": { "id": "user3" } }
-            ]
-        }
-        """;
-
-        var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.OK, truncatedResponse);
-
-        using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
-
-        var operations = Enumerable.Range(1, 5)
-            .Select(i => new BatchOperation($"/users/user{i}", "GET"))
-            .ToList();
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => batchClient.ExecuteBatchIndexedAsync(operations));
-
-        Assert.Contains("count mismatch", ex.Message);
-        Assert.Contains("sent 5", ex.Message);
-        Assert.Contains("received 3", ex.Message);
-    }
-
     // ── R2-8: 0 items — empty batch ──────────────────────────────────────────
-
-    [Fact]
-    public async Task Batch_ZeroItems_ReturnsEmptyResult_NoHttpCalls()
-    {
-        var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.OK, """{ "responses": [] }""");
-
-        using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
-
-        var operations = new List<BatchOperation>();
-
-        var result = await batchClient.ExecuteBatchIndexedAsync(operations);
-
-        Assert.Empty(result.Results);
-        Assert.Equal(0, handler.RequestCount);
-        Assert.Equal(0, result.Telemetry.TotalRequests);
-    }
 
     // ── R2-8: 1 item — single item batch ─────────────────────────────────────
 

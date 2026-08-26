@@ -52,16 +52,4 @@ public class DisableMgxResilienceTests
         }
     }
 
-    [Fact]
-    public void StateLock_IsSharedBetweenEnableAndDisable()
-    {
-        var lockObj = EnableMgxResilience.StateLock;
-        Assert.NotNull(lockObj);
-
-        lock (lockObj)
-        {
-            EnableMgxResilience.IsEnabled = true;
-            Assert.True(EnableMgxResilience.IsEnabled);
-        }
-    }
 }

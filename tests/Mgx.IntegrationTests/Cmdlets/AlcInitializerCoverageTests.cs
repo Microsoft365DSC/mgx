@@ -20,14 +20,6 @@ public class AlcInitializerCoverageTests
         "Dependencies");
 
     [Fact]
-    public void OnImport_AddsResolver()
-    {
-        var initializer = new AlcInitializer();
-        initializer.OnImport();
-        Assert.True(true);
-    }
-
-    [Fact]
     public void ResolveDependency_ReturnsNull_ForNonExistentAssembly()
     {
         var name = new AssemblyName("NonExistentAssembly.Test");
@@ -63,7 +55,7 @@ public class AlcInitializerCoverageTests
     }
 
     [Fact]
-    public void ResolveDependency_DoesNotThrow_OnException()
+    public void ResolveDependency_ReturnsNull_ForMalformedAssemblyName()
     {
         var name = new AssemblyName("Invalid/Name");
         var alc = AssemblyLoadContext.Default;
@@ -71,24 +63,6 @@ public class AlcInitializerCoverageTests
         var result = AlcInitializer.ResolveDependency(alc, name);
 
         Assert.Null(result);
-    }
-
-    [Fact]
-    public void OnRemove_RemovesResolver()
-    {
-        var initializer = new AlcInitializer();
-        initializer.OnImport();
-        initializer.OnRemove(null!);
-        Assert.True(true);
-    }
-
-    [Fact]
-    public void OnRemove_CallsResetHttpClient()
-    {
-        var initializer = new AlcInitializer();
-        initializer.OnImport();
-        initializer.OnRemove(null!);
-        Assert.True(true);
     }
 
     [Fact]

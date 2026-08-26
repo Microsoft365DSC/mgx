@@ -46,38 +46,4 @@ public class EnableMgxResilienceTests
         }
     }
 
-    [Fact]
-    public void Reset_ClearsPipelineAndRateLimiter()
-    {
-        try
-        {
-            EnableMgxResilience.IsEnabled = true;
-            EnableMgxResilience.ResilientSdkClient = new HttpClient();
-            EnableMgxResilience.OriginalSdkClient = new HttpClient();
-            EnableMgxResilience.ActiveHandler = new ResilientDelegatingHandler(
-                new ResiliencePipelineBuilder<HttpResponseMessage>().Build(), null);
-
-            // Reset clears the pipeline factory state
-            ResiliencePipelineFactory.Reset();
-
-            // Note: Reset() doesn't clear EnableMgxResilience static fields
-            // Those are managed by Enable/Disable-MgxResilience cmdlets
-            Assert.NotNull(EnableMgxResilience.ResilientSdkClient);
-            Assert.NotNull(EnableMgxResilience.OriginalSdkClient);
-            Assert.NotNull(EnableMgxResilience.ActiveHandler);
-        }
-        finally
-        {
-            ResetState();
-        }
-    }
-
-    [Fact]
-    public void StateLock_IsSharedWithDisable()
-    {
-        var enableLock = EnableMgxResilience.StateLock;
-        var disableLock = EnableMgxResilience.StateLock; // Same static field
-
-        Assert.Same(enableLock, disableLock);
-    }
 }

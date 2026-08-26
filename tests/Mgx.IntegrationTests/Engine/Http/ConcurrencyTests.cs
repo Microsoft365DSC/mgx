@@ -134,56 +134,6 @@ public class ConcurrencyTests
     }
 
     [Fact]
-    public void ConcurrentDispose_InterlockedPattern_OnlyDisposesOnce()
-    {
-        // H3: Simulates the StopProcessing + EndProcessing race in MgxCmdletBase.
-        // MgxCmdletBase.Dispose() uses Interlocked.CompareExchange to ensure the CTS
-        // and client are only disposed once, even when StopProcessing (pipeline-stopping
-        // thread) and EndProcessing (pipeline thread) call Dispose() concurrently.
-        //
-        // This test verifies the pattern: N threads race to dispose, exactly one succeeds.
-        // If the Interlocked guard is removed, the CTS would be disposed twice, causing
-        // ObjectDisposedException on the second Cancel() call.
-        var disposeCount = 0;
-        var disposed = 0; // mirrors MgxCmdletBase._disposed
-        var cts = new CancellationTokenSource();
-        var barrier = new Barrier(participantCount: 10);
-
-        var threads = Enumerable.Range(0, 10).Select(_ => new Thread(() =>
-        {
-            barrier.SignalAndWait(); // all threads start simultaneously
-            // Mirror MgxCmdletBase.Dispose() exactly:
-            if (Interlocked.CompareExchange(ref disposed, 1, 0) == 0)
-            {
-                cts.Cancel();
-                cts.Dispose();
-                Interlocked.Increment(ref disposeCount);
-            }
-        })).ToArray();
-
-        foreach (var t in threads) t.Start();
-        foreach (var t in threads) t.Join();
-
-        Assert.Equal(1, disposeCount);
-        Assert.Equal(1, disposed);
-    }
-
-    [Fact]
-    public void ConcurrentDispose_WithoutGuard_DoubleDisposeThrows()
-    {
-        // H3: Proves WHY the Interlocked guard is necessary.
-        // Calling Cancel() then Dispose() then Cancel() again on the same CTS
-        // throws ObjectDisposedException. This is deterministic (no race needed)
-        // and validates that the guard in MgxCmdletBase.Dispose() is load-bearing.
-        var cts = new CancellationTokenSource();
-        cts.Cancel();
-        cts.Dispose();
-
-        // Second Cancel() on a disposed CTS throws deterministically
-        Assert.Throws<ObjectDisposedException>(() => cts.Cancel());
-    }
-
-    [Fact]
     public async Task ConcurrentDispose_CtsCancel_DuringInFlightRequest()
     {
         // H3: Verifies that cancelling a CTS while a request is in-flight

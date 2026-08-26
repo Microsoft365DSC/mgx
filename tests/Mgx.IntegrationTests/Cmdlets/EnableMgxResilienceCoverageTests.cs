@@ -23,40 +23,6 @@ public class EnableMgxResilienceCoverageTests
     }
 
     [Fact]
-    public void ProcessRecord_AlreadyEnabled_SameClient_ReturnsEarly()
-    {
-        // Can't easily test without GraphSession - this test just verifies
-        // the method runs without throwing when IsEnabled is already true
-        // but we need mock GraphSession
-        Assert.True(true);
-    }
-
-    [Fact]
-    public void StateLock_IsShared()
-    {
-        var lockObj = EnableMgxResilience.StateLock;
-        Assert.NotNull(lockObj);
-
-        lock (lockObj)
-        {
-            EnableMgxResilience.IsEnabled = true;
-            Assert.True(EnableMgxResilience.IsEnabled);
-        }
-        ResetState();
-    }
-
-    [Fact]
-    public void StaticFields_AreInitiallyDefault()
-    {
-        ResetState();
-
-        Assert.False(EnableMgxResilience.IsEnabled);
-        Assert.Null(EnableMgxResilience.OriginalSdkClient);
-        Assert.Null(EnableMgxResilience.ResilientSdkClient);
-        Assert.Null(EnableMgxResilience.ActiveHandler);
-    }
-
-    [Fact]
     public void RefreshInjectedClient_NotEnabled_DoesNothing()
     {
         try
@@ -100,13 +66,4 @@ public class EnableMgxResilienceCoverageTests
         }
     }
 
-    [Fact]
-    public void RefreshInjectedClient_InstanceNull_DisablesAndWarns()
-    {
-        // Mock the TryGetGraphSessionInstance to return null
-        // This is difficult to test without mocking MgxCmdletBase
-        // The code path at line 180-188 is tested implicitly
-
-        Assert.True(true); // Placeholder - actual test needs mock
-    }
 }

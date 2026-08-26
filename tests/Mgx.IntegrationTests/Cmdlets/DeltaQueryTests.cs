@@ -194,7 +194,6 @@ public class DeltaQueryTests
         Assert.Equal("deleted", removed.GetProperty("reason").GetString());
         // @removed does NOT start with @odata. so it survives JsonToHashtable's
         // @odata.* stripping filter
-        Assert.False("@removed".StartsWith("@odata.", StringComparison.OrdinalIgnoreCase));
     }
 
     // --- DeltaState persistence ---
@@ -560,203 +559,11 @@ public class DeltaQueryTests
 
     // --- #4: OutputFile temp file cleanup on error ---
 
-    [Fact]
-    public async Task Delta_OutputFile_TempFileCleanedUpOnError()
-    {
-        ResiliencePipelineFactory.Reset();
-        var handler = new MockHttpHandler();
-        handler.QueueResponse(HttpStatusCode.OK, DeltaPage1);
-        // Queue enough 500s to exhaust Polly retries (1 initial + 1 retry = 2 attempts)
-        handler.QueueResponse(HttpStatusCode.InternalServerError);
-        handler.QueueResponse(HttpStatusCode.InternalServerError);
-
-        using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions
-        {
-            NoRateLimit = true,
-            MaxRetryAttempts = 1
-        });
-
-        var outputPath = Path.Combine(Path.GetTempPath(), $"delta-cleanup-{Guid.NewGuid()}.jsonl");
-        var tmpPath = $"{outputPath}.tmp";
-        try
-        {
-            var iterator = new PageIterator(client);
-            var writePath = $"{outputPath}.{Guid.NewGuid():N}.tmp";
-            try
-            {
-                using (var writer = new StreamWriter(writePath, append: false))
-                {
-                    await foreach (var item in iterator.StreamAllWithCountAsync(
-                        "https://graph.microsoft.com/v1.0/users/delta",
-                        0,
-                        null,
-                        onDeltaLink: _ => { }))
-                    {
-                        writer.WriteLine(item.GetRawText());
-                    }
-                }
-                File.Move(writePath, outputPath, overwrite: true);
-            }
-            catch
-            {
-                // Simulate the cmdlet's cleanup behavior
-                try { if (File.Exists(writePath)) File.Delete(writePath); } catch { }
-                throw;
-            }
-
-            Assert.Fail("Should have thrown");
-        }
-        catch (GraphServiceException)
-        {
-            // Expected: 500 error on page 2
-            Assert.False(File.Exists(outputPath), "Final output file should not exist after error");
-        }
-        finally
-        {
-            if (File.Exists(outputPath)) File.Delete(outputPath);
-        }
-    }
-
     // --- #5: OutputFile atomic rename on success ---
-
-    [Fact]
-    public async Task Delta_OutputFile_AtomicRenameOnSuccess()
-    {
-        ResiliencePipelineFactory.Reset();
-        var handler = new MockHttpHandler();
-        handler.QueueResponse(HttpStatusCode.OK, DeltaPage2WithToken);
-
-        using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-
-        var outputPath = Path.Combine(Path.GetTempPath(), $"delta-atomic-{Guid.NewGuid()}.jsonl");
-        try
-        {
-            var iterator = new PageIterator(client);
-            var writePath = $"{outputPath}.{Guid.NewGuid():N}.tmp";
-            using (var writer = new StreamWriter(writePath, append: false))
-            {
-                await foreach (var item in iterator.StreamAllWithCountAsync(
-                    "https://graph.microsoft.com/v1.0/users/delta",
-                    0,
-                    null,
-                    onDeltaLink: _ => { }))
-                {
-                    writer.WriteLine(item.GetRawText());
-                }
-            }
-            // Atomic rename
-            File.Move(writePath, outputPath, overwrite: true);
-
-            Assert.True(File.Exists(outputPath));
-            Assert.False(File.Exists(writePath), "Temp file should be gone after rename");
-            Assert.Single(File.ReadAllLines(outputPath));
-        }
-        finally
-        {
-            if (File.Exists(outputPath)) File.Delete(outputPath);
-        }
-    }
 
     // --- #6: Cancellation does NOT save delta state ---
 
-    [Fact]
-    public async Task Delta_Cancellation_DoesNotSaveDeltaState()
-    {
-        ResiliencePipelineFactory.Reset();
-        var handler = new MockHttpHandler();
-        // Page 1 returns items, page 2 will be cancelled
-        handler.QueueResponse(HttpStatusCode.OK, DeltaPage1);
-        handler.SetDefaultResponse(HttpStatusCode.OK, DeltaPage2WithToken);
-
-        using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-
-        var deltaPath = Path.Combine(Path.GetTempPath(), $"delta-cancel-{Guid.NewGuid()}.json");
-        try
-        {
-            var cts = new CancellationTokenSource();
-            var iterator = new PageIterator(client);
-            string? capturedDeltaLink = null;
-            int itemCount = 0;
-
-            await Assert.ThrowsAsync<OperationCanceledException>(async () =>
-            {
-                await foreach (var item in iterator.StreamAllWithCountAsync(
-                    "https://graph.microsoft.com/v1.0/users/delta",
-                    0,
-                    null,
-                    onDeltaLink: dl => capturedDeltaLink = dl,
-                    cancellationToken: cts.Token))
-                {
-                    itemCount++;
-                    if (itemCount >= 1) cts.Cancel(); // Cancel after first item
-                }
-            });
-
-            // Delta state should NOT be saved (cmdlet only saves after successful completion)
-            Assert.False(File.Exists(deltaPath), "Delta state should not be saved on cancellation");
-        }
-        finally
-        {
-            DeltaState.Delete(deltaPath);
-        }
-    }
-
     // --- #7: Cancellation cleans up temp file ---
-
-    [Fact]
-    public async Task Delta_Cancellation_CleansUpTempFile()
-    {
-        ResiliencePipelineFactory.Reset();
-        var handler = new MockHttpHandler();
-        handler.QueueResponse(HttpStatusCode.OK, DeltaPage1);
-        handler.SetDefaultResponse(HttpStatusCode.OK, DeltaPage2WithToken);
-
-        using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-
-        var outputPath = Path.Combine(Path.GetTempPath(), $"delta-cancel-out-{Guid.NewGuid()}.jsonl");
-        var cts = new CancellationTokenSource();
-        string? writePath = null;
-
-        try
-        {
-            writePath = $"{outputPath}.{Guid.NewGuid():N}.tmp";
-            var iterator = new PageIterator(client);
-
-            try
-            {
-                using (var writer = new StreamWriter(writePath, append: false))
-                {
-                    await foreach (var item in iterator.StreamAllWithCountAsync(
-                        "https://graph.microsoft.com/v1.0/users/delta",
-                        0,
-                        null,
-                        onDeltaLink: _ => { },
-                        cancellationToken: cts.Token))
-                    {
-                        writer.WriteLine(item.GetRawText());
-                        cts.Cancel();
-                    }
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // Simulate cmdlet cleanup
-                try { if (File.Exists(writePath)) File.Delete(writePath); } catch { }
-            }
-
-            Assert.False(File.Exists(writePath), "Temp file should be cleaned up on cancellation");
-            Assert.False(File.Exists(outputPath), "Output file should not exist after cancellation");
-        }
-        finally
-        {
-            if (writePath != null && File.Exists(writePath)) File.Delete(writePath);
-            if (File.Exists(outputPath)) File.Delete(outputPath);
-        }
-    }
 
     // --- #8: Delta state NOT saved on GraphServiceException ---
 
@@ -886,14 +693,6 @@ public class DeltaQueryTests
     }
 
     // --- #12: IOException from file operations ---
-
-    [Fact]
-    public void Delta_OutputFile_IOException_WhenPathInvalid()
-    {
-        // Verify that writing to an invalid path throws IOException
-        var invalidPath = Path.Combine(Path.GetTempPath(), new string('x', 300), "output.jsonl");
-        Assert.ThrowsAny<Exception>(() => new StreamWriter(invalidPath));
-    }
 
     // --- #13: No deltaLink received warning scenario ---
 

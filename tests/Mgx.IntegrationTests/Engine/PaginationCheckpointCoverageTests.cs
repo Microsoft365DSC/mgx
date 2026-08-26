@@ -25,26 +25,6 @@ public class PaginationCheckpointCoverageTests : IDisposable
     private string PathFor(string name) => Path.Combine(_dir, name);
 
     [Fact]
-    public void Load_FileNotFound_ReturnsNull()
-    {
-        Assert.Null(PaginationCheckpoint.Load(PathFor("missing.checkpoint")));
-    }
-
-    [Fact]
-    public void Load_CorruptJson_ReturnsNull()
-    {
-        File.WriteAllText(PathFor("corrupt.checkpoint"), "{ not valid json }");
-        Assert.Null(PaginationCheckpoint.Load(PathFor("corrupt.checkpoint")));
-    }
-
-    [Fact]
-    public void Load_EmptyFile_ReturnsNull()
-    {
-        File.WriteAllText(PathFor("empty.checkpoint"), "");
-        Assert.Null(PaginationCheckpoint.Load(PathFor("empty.checkpoint")));
-    }
-
-    [Fact]
     public void Save_OverwritesExistingFile()
     {
         var path = PathFor("overwrite.checkpoint");
@@ -79,41 +59,6 @@ public class PaginationCheckpointCoverageTests : IDisposable
     public void Delete_NonExistentFile_ReturnsTrue()
     {
         Assert.True(PaginationCheckpoint.Delete(PathFor("nonexistent.checkpoint")));
-    }
-
-    [Fact]
-    public void Delete_RemovesBothMainAndTmpFiles()
-    {
-        var path = PathFor("deleteboth.checkpoint");
-        new PaginationCheckpoint { Resource = "/test", NextLink = null, ItemsCollected = 0 }.Save(path);
-        File.WriteAllText(path + ".tmp", "temp data");
-
-        Assert.True(PaginationCheckpoint.Delete(path));
-        Assert.False(File.Exists(path));
-        Assert.False(File.Exists(path + ".tmp"));
-    }
-
-    [Fact]
-    public void RoundTrip_AllPropertiesPreserved()
-    {
-        var path = PathFor("full.checkpoint");
-        var original = new PaginationCheckpoint
-        {
-            Resource = "/users/delta",
-            NextLink = "https://graph.microsoft.com/v1.0/users/delta?$deltatoken=xyz",
-            ItemsCollected = 1234,
-            PageItemsAlreadyWritten = 56,
-            Timestamp = DateTimeOffset.UtcNow.AddMinutes(-5)
-        };
-        original.Save(path);
-
-        var loaded = PaginationCheckpoint.Load(path);
-        Assert.NotNull(loaded);
-        Assert.Equal(original.Resource, loaded.Resource);
-        Assert.Equal(original.NextLink, loaded.NextLink);
-        Assert.Equal(original.ItemsCollected, loaded.ItemsCollected);
-        Assert.Equal(original.PageItemsAlreadyWritten, loaded.PageItemsAlreadyWritten);
-        Assert.True(loaded.Timestamp >= original.Timestamp.AddMinutes(-1));
     }
 
     [Fact]

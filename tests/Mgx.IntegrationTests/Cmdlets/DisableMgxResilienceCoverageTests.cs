@@ -45,41 +45,4 @@ public class DisableMgxResilienceCoverageTests
         }
     }
 
-    [Fact]
-    public void StaticState_ResetsCorrectly()
-    {
-        EnableMgxResilience.IsEnabled = true;
-        EnableMgxResilience.OriginalSdkClient = new HttpClient();
-        EnableMgxResilience.ResilientSdkClient = new HttpClient();
-        EnableMgxResilience.ActiveHandler = new ResilientDelegatingHandler(
-            new ResiliencePipelineBuilder<HttpResponseMessage>().Build(), null);
-
-        EnableMgxResilience.IsEnabled = false;
-        EnableMgxResilience.OriginalSdkClient = null;
-        EnableMgxResilience.ResilientSdkClient = null;
-        EnableMgxResilience.ActiveHandler = null;
-
-        Assert.False(EnableMgxResilience.IsEnabled);
-        Assert.Null(EnableMgxResilience.OriginalSdkClient);
-        Assert.Null(EnableMgxResilience.ResilientSdkClient);
-        Assert.Null(EnableMgxResilience.ActiveHandler);
-    }
-
-    [Fact]
-    public void ProcessRecord_OriginalClientNull_Throws()
-    {
-        Assert.True(true);
-    }
-
-    [Fact]
-    public void ProcessRecord_GraphSessionNull_Throws()
-    {
-        Assert.True(true);
-    }
-
-    [Fact]
-    public void ProcessRecord_EnabledButOriginalClientMissing_ThrowsError()
-    {
-        Assert.True(true);
-    }
 }
