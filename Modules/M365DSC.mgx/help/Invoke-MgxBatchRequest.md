@@ -25,7 +25,7 @@ Supports GET, POST, PATCH, PUT, and DELETE methods with optional request bodies.
 
 Source: [Combine multiple HTTP requests using JSON batching](https://learn.microsoft.com/en-us/graph/json-batching)
 
-Pipeline input can be string URLs (for GET, or combined with -Method/-Body for the same operation on all) or hashtables or PSCustomObjects with Url, Method, and Body members for per-item control.
+Pipeline input can be string URLs (for GET, or combined with -Method/-Body for the same operation on all) or hashtables or PSCustomObjects with Url, Method, and Body members for per-item control. An optional Id member is echoed back on the matching result, so you can correlate on your own key instead of on URL or position.
 
 Failed items are surfaced as PowerShell ErrorRecords. Use -ErrorAction Stop to halt on the first failure, or inspect $Error after completion.
 
@@ -120,7 +120,7 @@ Creates 1000 users via batch. Any failures (status >= 400) are appended to the J
 $urls = 1..10000 | ForEach-Object { "/users/$_" }
 $urls | Invoke-MgxBatchRequest
 
-# Avoid: calling in a tight loop - slower and can cause threading errors at 200+ iterations
+# Avoid: calling in a tight loop - many more round-trips than one chunked call
 foreach ($url in $urls) { $url | Invoke-MgxBatchRequest }
 ```
 
@@ -159,8 +159,38 @@ Accept pipeline input: False
 Accept wildcard characters: False
 ```
 
+
+### -FollowNextLink
+Drain `@odata.nextLink` in sub-response bodies, merging the pages into each result. Off by default.
+
+A batched sub-request against a collection returns only its first page, and `/$batch` does not page. Without this switch each such result is a partial collection, and you cannot tell: the conversion to a hashtable strips `@odata.nextLink` along with the rest of the `@odata.*` metadata, so a truncated read looks exactly like a complete one.
+
+Follow-up pages are submitted as further batches rather than per-item GETs, so N partial collections drain in ceil(N/20) requests per page.
+
+If a page cannot be read - an HTTP failure, or a `nextLink` that fails host validation - that one sub-request is marked failed: `Status` becomes the failing page's status, `PagingIncomplete` is set to `$true`, and a non-terminating error is written (`BatchPagingFailed`, `BatchNextLinkRefused`, or `BatchPagingTruncated`). The items already collected stay in `Body`, so you can use them deliberately. One failed link never discards the other results in the batch.
+
+```yaml
+Type: SwitchParameter
+Required: False
+Position: Named
+Default value: False
+Accept pipeline input: False
+Accept wildcard characters: False
+```
+
+### -MaxPage
+Ceiling on the number of pages drained per sub-request when `-FollowNextLink` is used. The default, 0, is unlimited. Hitting the ceiling marks the result `PagingIncomplete` and writes a `BatchPagingTruncated` error, so a bounded read is never mistaken for a complete one.
+
+```yaml
+Type: Int32
+Required: False
+Position: Named
+Default value: 0
+Accept pipeline input: False
+Accept wildcard characters: False
+```
 ### -DeadLetterPath
-Path to a JSONL file where failed batch items (status >= 400) are appended, along with any that were never sent because an earlier chunk failed. Each line contains Url, Method, Body (with sensitive fields redacted), Status, Error, and Timestamp. It is a record of what to retry, not a request you can replay directly: the redaction that keeps passwords out of the file also means a redacted Body is no longer the body that was sent. Read it to decide what to resubmit, and supply the sensitive fields again yourself.
+Path to a JSONL file where failed batch items (status >= 400) are appended, along with any that were never sent because an earlier chunk failed. Each line contains Url, Method, Body (with sensitive fields redacted), Status, Error, Timestamp, and the Id if one was supplied. It is a record of what to retry, not a request you can replay directly: the redaction that keeps passwords out of the file also means a redacted Body is no longer the body that was sent. Read it to decide what to resubmit, and supply the sensitive fields again yourself.
 
 ```yaml
 Type: String
@@ -254,7 +284,7 @@ Accept wildcard characters: False
 ```
 
 ### -Uri
-Graph API URLs to batch. Accepts absolute URLs (https://graph.microsoft.com/v1.0/users/id) or relative URLs (/users/id). Also accepts hashtables or PSCustomObjects with Url, Method, and Body members for per-item control.
+Graph API URLs to batch. Accepts absolute URLs (https://graph.microsoft.com/v1.0/users/id) or relative URLs (/users/id). Also accepts hashtables or PSCustomObjects with Url, Method, and Body members for per-item control, plus an optional Id that is echoed back on the matching result.
 
 ```yaml
 Type: Object[]
@@ -309,7 +339,7 @@ String URLs, or hashtables or PSCustomObjects with Url, Method, and Body members
 ## OUTPUTS
 
 ### System.Collections.Hashtable
-Per-request results with Url, Method, Status, and Body keys, plus NotSent on any operation that was never sent because an earlier chunk failed. Body here is the RESPONSE body - for a failure that is the error envelope, not the request - so piping results straight back resubmits the wrong thing. Use Url and Method to rebuild the requests you want to retry.
+Per-request results with Url, Method, Status, and Body keys, plus Id when the request supplied one, NotSent on any operation that was never sent because an earlier chunk failed, and PagingIncomplete when -FollowNextLink could not drain the collection. Body here is the RESPONSE body - for a failure that is the error envelope, not the request - so piping results straight back resubmits the wrong thing. Use Url and Method to rebuild the requests you want to retry.
 
 ## NOTES
 Each batch item is retried individually on 429 (throttled) or 5xx errors (for idempotent methods). POST requests only retry on 429 because POST is non-idempotent - retrying a failed POST on 5xx could create duplicates if the server processed the request before the error. This matches the Kiota SDK retry behavior. Source: [Microsoft Graph error responses and resource types](https://learn.microsoft.com/en-us/graph/errors)
@@ -320,7 +350,7 @@ Use -Verbose to see retry counts, throttle encounters, and timing.
 
 Batching reduces HTTP round-trips (20 operations per request instead of 1), but Graph counts each item inside a batch individually against the server-side write quota (3,000 writes / 2.5 min per app+tenant). Sustained write throughput caps at ~20/sec regardless of batching. See [Set-MgxOption](Set-MgxOption.md) for the full throttle limits table and tuning guidance. Source: [Microsoft Graph service-specific throttling limits](https://learn.microsoft.com/en-us/graph/throttling-limits)
 
-For best performance and stability, always pipe all items into a single Invoke-MgxBatchRequest call rather than calling it in a loop. At 200+ rapid invocations per second, PowerShell's internal pipeline thread safety can race between cmdlet instances. Piping all items into one call avoids this entirely and is significantly faster.
+Pipe all items into a single Invoke-MgxBatchRequest call rather than calling it in a loop. One call chunks the items itself, so it makes far fewer round-trips than a loop of single-item calls and reuses one HTTP client, one rate limiter and one circuit breaker. Repeated invocation is safe at any rate the host can drive.
 
 ## RELATED LINKS
 [Invoke-MgxRequest](Invoke-MgxRequest.md)

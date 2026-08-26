@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using Mgx.Cmdlets.Base;
 using Mgx.Engine.Http;
 using Mgx.Engine.Models;
+using Mgx.Engine.Pagination;
 using Polly.CircuitBreaker;
 
 namespace Mgx.Cmdlets.Cmdlets.Batch;
@@ -65,6 +66,19 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
 
     [Parameter]
     public string? DeadLetterPath { get; set; }
+
+    /// <summary>
+    /// Drain @odata.nextLink in sub-response bodies, merging the pages into each result. Off by
+    /// default. Follow-up pages are submitted as further batches, so N partial collections drain
+    /// in ceil(N/20) requests per page rather than N.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter FollowNextLink { get; set; }
+
+    /// <summary>Ceiling on pages drained per sub-request. 0, the default, is unlimited.</summary>
+    [Parameter]
+    [ValidateRange(0, int.MaxValue)]
+    public int MaxPage { get; set; }
 
     private string VersionedBaseUrl => $"{s_graphEndpoint}/{ApiVersion}";
 
@@ -176,7 +190,7 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                     }
                 }
 
-                operations.Add(new BatchOperation(NormalizeToRelativeUrl(input.Url), input.Method, body));
+                operations.Add(new BatchOperation(NormalizeToRelativeUrl(input.Url), input.Method, body, input.Id));
                 submitted.Add(input);
             }
 
@@ -188,6 +202,10 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
 
             var results = batchResult.Results;
             var telemetry = batchResult.Telemetry;
+
+            var drains = FollowNextLink.IsPresent
+                ? DrainNextLinks(batchClient, results)
+                : [];
 
             for (int i = 0; i < results.Count; i++)
             {
@@ -203,6 +221,13 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                         ? JsonToHashtable(item.Body.Value)
                         : null
                 };
+
+                if (drains.TryGetValue(i, out var drain))
+                    ApplyDrain(result, drain, input);
+
+                // Only when the caller supplied one, so output is unchanged for callers that did not
+                if (input.Id != null)
+                    result["Id"] = input.Id;
 
                 // Status 0 means the operation was never sent, because a chunk before it failed.
                 // It is not a success and must not read as one - the caller has to be able to
@@ -243,6 +268,10 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                             ["Method"] = input.Method,
                             ["Status"] = item.Status,
                         };
+
+                        // Carried so a dead-letter replay round-trips the caller correlation key
+                        if (input.Id != null)
+                            deadLetter["Id"] = input.Id;
 
                         if (input.Body != null)
                         {
@@ -321,7 +350,8 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
     /// <summary>
     /// Parse pipeline input into a BatchInput. Supports:
     /// - String: use as URL with shared -Method/-Body parameters
-    /// - Hashtable or PSObject with a Url member: use per-item Url/Method/Body
+    /// - Hashtable or PSObject with a Url member: use per-item Url/Method/Body, and an optional Id
+    ///   echoed back on the matching result
     /// </summary>
     internal BatchInput? ParsePipelineInput(object item)
     {
@@ -345,7 +375,10 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                     return null;
                 }
                 var body = TryGetMember(value, "Body");
-                return new BatchInput(urlValue, method, body);
+                // The caller id is theirs to choose and is echoed back on the result. The wire id
+                // GraphBatchClient assigns is regenerated per retry attempt and stays internal
+                var id = TryGetMember(value, "Id")?.ToString();
+                return new BatchInput(urlValue, method, body, id);
             }
         }
 
@@ -474,5 +507,145 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
         }
     }
 
-    internal sealed record BatchInput(string Url, string Method, object? Body);
+    internal sealed record BatchInput(string Url, string Method, object? Body, string? Id = null);
+
+    /// <summary>
+    /// What draining produced for one sub-request: the extra items collected, and the failure that
+    /// stopped it if it did not drain fully.
+    /// </summary>
+    private sealed class PageDrain
+    {
+        public List<JsonElement> Extra { get; } = [];
+        public int? FailedStatus { get; set; }
+        public string? FailedReason { get; set; }
+        public string? FailedErrorId { get; set; }
+        public bool Incomplete => FailedStatus.HasValue;
+    }
+
+    private static string? ReadNextLink(JsonElement? body)
+    {
+        if (body is not { ValueKind: JsonValueKind.Object } obj) return null;
+        return obj.TryGetProperty("@odata.nextLink", out var link) && link.ValueKind == JsonValueKind.String
+            ? link.GetString()
+            : null;
+    }
+
+    private static IEnumerable<JsonElement> ReadValueItems(JsonElement? body)
+    {
+        if (body is not { ValueKind: JsonValueKind.Object } obj) yield break;
+        if (!obj.TryGetProperty("value", out var value) || value.ValueKind != JsonValueKind.Array) yield break;
+        foreach (var item in value.EnumerateArray()) yield return item.Clone();
+    }
+
+    /// <summary>
+    /// Follow @odata.nextLink for every sub-response that carries one, submitting each round as a
+    /// further batch so the round-trip advantage of batching is kept.
+    /// </summary>
+    private Dictionary<int, PageDrain> DrainNextLinks(
+        GraphBatchClient batchClient,
+        IReadOnlyList<(BatchOperation Operation, GraphBatchResponseItem Response)> results)
+    {
+        var drains = new Dictionary<int, PageDrain>();
+        var pending = new Dictionary<int, string>();
+        var expectedHost = new Uri(s_graphEndpoint);
+
+        for (var i = 0; i < results.Count; i++)
+        {
+            var link = ReadNextLink(results[i].Response.Body);
+            if (link != null) pending[i] = link;
+        }
+
+        var page = 0;
+        while (pending.Count > 0 && (MaxPage == 0 || page < MaxPage))
+        {
+            page++;
+            var indices = new List<int>(pending.Count);
+            var ops = new List<BatchOperation>(pending.Count);
+
+            foreach (var (index, link) in pending)
+            {
+                var drain = drains.TryGetValue(index, out var d) ? d : drains[index] = new PageDrain();
+
+                // The link comes out of a response body, so it is validated like every other
+                // nextLink in the module before anything follows it
+                if (NextLinkValidator.Validate(link, expectedHost) == null)
+                {
+                    drain.FailedStatus = results[index].Response.Status;
+                    drain.FailedReason = $"the service returned an @odata.nextLink that failed validation ({link})";
+                    drain.FailedErrorId = "BatchNextLinkRefused";
+                    continue;
+                }
+
+                indices.Add(index);
+                ops.Add(new BatchOperation(NormalizeToRelativeUrl(link), "GET"));
+            }
+
+            pending.Clear();
+            if (ops.Count == 0) break;
+
+            var followUp = batchClient.ExecuteBatchIndexedAsync(ops, CancellationToken).GetAwaiter().GetResult();
+            for (var j = 0; j < followUp.Results.Count; j++)
+            {
+                var index = indices[j];
+                var drain = drains[index];
+                var response = followUp.Results[j].Response;
+
+                if (response.Status >= 400 || response.Status == GraphBatchClient.NotSentStatus)
+                {
+                    drain.FailedStatus = response.Status;
+                    drain.FailedReason = "a page of the collection could not be read";
+                    drain.FailedErrorId = "BatchPagingFailed";
+                    continue;
+                }
+
+                drain.Extra.AddRange(ReadValueItems(response.Body));
+
+                var next = ReadNextLink(response.Body);
+                if (next != null) pending[index] = next;
+            }
+        }
+
+        // Whatever is still pending ran into the ceiling rather than the end of the collection
+        foreach (var (index, _) in pending)
+        {
+            var drain = drains.TryGetValue(index, out var d) ? d : drains[index] = new PageDrain();
+            drain.FailedStatus = results[index].Response.Status;
+            drain.FailedReason = $"stopped after -MaxPage {MaxPage} pages with more to read";
+            drain.FailedErrorId = "BatchPagingTruncated";
+        }
+
+        return drains;
+    }
+
+    /// <summary>
+    /// Fold a drain into the result: merge the extra pages into Body.value, and if the drain stopped
+    /// early mark the result failed rather than letting a short collection read as a complete one.
+    /// </summary>
+    private void ApplyDrain(Hashtable result, PageDrain drain, BatchInput input)
+    {
+        if (result["Body"] is Hashtable body)
+        {
+            if (drain.Extra.Count > 0)
+            {
+                var merged = new List<object?>();
+                if (body["value"] is IEnumerable existing and not string)
+                    foreach (var item in existing) merged.Add(item);
+                foreach (var item in drain.Extra) merged.Add(JsonToHashtable(item));
+                body["value"] = merged.ToArray();
+            }
+
+        }
+
+        if (!drain.Incomplete) return;
+
+        // The failing page's status, not the first page's 200. A partially drained collection is a
+        // failed read, and PagingIncomplete separates "nothing arrived" from "some of it did"
+        result["Status"] = drain.FailedStatus!.Value;
+        result["PagingIncomplete"] = true;
+
+        var message = $"{input.Method} {input.Url}: {drain.FailedReason}. "
+            + $"{drain.Extra.Count} additional item(s) were read before it stopped.";
+        WriteError(new ErrorRecord(new InvalidOperationException(message),
+            drain.FailedErrorId!, ErrorCategory.LimitsExceeded, input.Url));
+    }
 }

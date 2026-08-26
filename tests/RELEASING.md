@@ -8,10 +8,12 @@ Every command below runs from the repository root, not from this directory.
 ## Before
 
 1. **Both suites, both platforms.**
-   ```
+
+   ```powershell
    dotnet test tests/Mgx.IntegrationTests/Mgx.IntegrationTests.csproj
    pwsh -c 'Invoke-Pester -Path ./tests/Unit'
    ```
+
    Run them on Windows too. A green run on one OS says nothing about file locking, path
    comparison or the exceptions Windows raises where Unix raises different ones - each of those
    has shipped a defect here.

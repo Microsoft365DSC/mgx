@@ -10,12 +10,14 @@ Merges upstream `gromedev/mgx` 2.1.1. The module name, version line, target fram
 - Adaptive request pacing, on by default. Requests are spaced before they are sent, per workload, ahead of the token bucket. Opt out with `Set-MgxOption -NoAdaptivePacing`. The batch pacer's existing AIMD now shares the same rules.
 - `Sync-MgxDelta -CheckpointPath` to resume an interrupted enumeration, `-Latest` to baseline state without enumerating, and `-Prefer` for drive delta tokens.
 - Telemetry now reports `AdaptivePacingWaitMs`, `AdaptivePacingActivations`, `LastThrottlePercentage`, `PacingState` and `ContentBytesDownloaded`.
+- `Invoke-MgxBatchRequest` echoes a caller-supplied `Id`, so a batch is correlated on your own key rather than on URL or output position. Dead-letter records carry it too. Output is unchanged when no `Id` is supplied.
+- `Invoke-MgxBatchRequest -FollowNextLink` drains `@odata.nextLink` in sub-responses, merging the pages in through follow-up batches. A page that cannot be read marks that one sub-request `PagingIncomplete` and takes the failing page's `Status`, without discarding the others. `-MaxPage` bounds the drain.
 - `tests/benchmarks`, 19 standalone performance scripts. Not run in CI.
 - The build now regenerates the compiled help from `Modules/M365DSC.mgx/help` with platyPS and fails when it cannot, so the shipped MAML cannot drift from its source. `tests/Unit/Mgx.HelpFreshness.Tests.ps1` checks the same thing from the other side.
 
 ### Fixed
 
-- `Invoke-MgxBatchRequest` emitted no per-item error for a failed batch item unless `-DeadLetterPath` was given and writing that file then threw, so `-ErrorAction Stop` did not trip and `$Error` stayed empty. The per-item errors now run on every batch.
+- `Invoke-MgxBatchRequest` emitted no per-item error for a failed batch item unless `-DeadLetterPath` was given and writing that file then threw, so `-ErrorAction Stop` did not trip and `$Error` stayed empty. The per-item errors now run on every batch. Note that these land in `$Error` even under `-ErrorAction SilentlyContinue`, so anything branching on `$Error[0]` may see a batch error it did not before.
 - `Get-MgxResilience` and `Export-MgxCollection` declared `[OutputType(typeof(PSObject))]` while emitting `MgxResilienceOutput` and `MgxExportResult`. Both now declare the type they return.
 - Enumeration returned part of a collection without an error when a `nextLink` was refused. A refused link now throws, so a truncated result can no longer be mistaken for a complete one.
 - `-Debug` wrote pre-authenticated download URLs verbatim, from both redirect headers and response bodies. Capability-carrying URLs and `Location` headers are now redacted.
@@ -30,6 +32,7 @@ Merges upstream `gromedev/mgx` 2.1.1. The module name, version line, target fram
 
 ### Changed
 
+- Removed the unsupported claim that `Invoke-MgxBatchRequest` races above 200 invocations per second. 500 instantiations well past that rate produce no failures.
 - `tests/` is now lowercase, matching upstream, so both test trees can coexist on a case-insensitive filesystem.
 - `examples/` is grouped into folders by purpose.
 - The module staging target runs on Release only, so a Debug `dotnet test` no longer overwrites a Release-staged module.
@@ -90,9 +93,9 @@ Merges upstream `gromedev/mgx` 2.1.1. The module name, version line, target fram
 
 ## 1.0.3
 
-_Upstream release, merged into this fork at 2.0.4. The `SdkVersion` fix listed here was already
+*Upstream release, merged into this fork at 2.0.4. The `SdkVersion` fix listed here was already
 solved differently in 2.0.2 (derived from the assembly version rather than a hand-maintained
-constant), so upstream's constant and its build gate were not carried over._
+constant), so upstream's constant and its build gate were not carried over.*
 
 - Fixed `Remove-Module Mgx` failing and leaving the module loaded. Static-state cleanup moved into `AlcInitializer.OnRemove`, ahead of the ALC resolver detaching; it previously ran from the module `OnRemove` scriptblock, by which point `Polly.Core` was unresolvable. Only triggered when no Graph request had run in the session
 - Fixed the `SdkVersion` request header reporting `mgx/0.3.0` regardless of the installed version. It now matches the module version, and `build.ps1` fails the build if the constant and the manifest ever disagree
