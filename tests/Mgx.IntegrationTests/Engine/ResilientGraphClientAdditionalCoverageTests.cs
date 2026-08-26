@@ -8,6 +8,8 @@ namespace Mgx.IntegrationTests.Engine;
 /// <summary>
 /// Additional coverage tests for ResilientGraphClient.
 /// </summary>
+// Touches MgxCmdletBase and pipeline statics, so it must not run beside the injected-mock tests
+[Collection("Pipeline")]
 public class ResilientGraphClientAdditionalCoverageTests
 {
     [Fact]

@@ -97,7 +97,7 @@ public class PageIteratorTests
     }
 
     [Fact]
-    public async Task Pagination_stops_when_the_nextLink_points_at_another_host()
+    public async Task Pagination_fails_when_the_nextLink_points_at_another_host()
     {
         var handler = new StubHttpMessageHandler()
             .EnqueueJson(System.Net.HttpStatusCode.OK, Page(1, 1, "https://evil.example.com/v1.0/users?$skiptoken=p2"))
@@ -105,23 +105,23 @@ public class PageIteratorTests
         var (iterator, http) = NewIterator(handler);
         using var _ = http;
 
-        var ids = await IdsOf(iterator.StreamAllWithCountAsync(Start, 0, null, cancellationToken: Ct));
-
-        Assert.Equal(["u1"], ids);
+        // A refused nextLink throws rather than ending the loop, so a truncated collection
+        // cannot be mistaken for a complete one
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => IdsOf(iterator.StreamAllWithCountAsync(Start, 0, null, cancellationToken: Ct)));
         Assert.Equal(1, handler.RequestCount);
     }
 
     [Fact]
-    public async Task Pagination_stops_when_the_nextLink_downgrades_to_http()
+    public async Task Pagination_fails_when_the_nextLink_downgrades_to_http()
     {
         var handler = new StubHttpMessageHandler()
             .EnqueueJson(System.Net.HttpStatusCode.OK, Page(1, 1, "http://graph.microsoft.com/v1.0/users?$skiptoken=p2"));
         var (iterator, http) = NewIterator(handler);
         using var _ = http;
 
-        var ids = await IdsOf(iterator.StreamAllWithCountAsync(Start, 0, null, cancellationToken: Ct));
-
-        Assert.Equal(["u1"], ids);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => IdsOf(iterator.StreamAllWithCountAsync(Start, 0, null, cancellationToken: Ct)));
     }
 
     [Fact]

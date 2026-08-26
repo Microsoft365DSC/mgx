@@ -11,6 +11,8 @@ namespace Mgx.IntegrationTests.Cmdlets;
 /// <summary>
 /// Tests for Export-MgxCollection cmdlet.
 /// </summary>
+// Hosts cmdlets through MgxTestHost, which sets the shared transport and client options
+[Collection("Pipeline")]
 public class ExportMgxCollectionTests
 {
     [Fact]

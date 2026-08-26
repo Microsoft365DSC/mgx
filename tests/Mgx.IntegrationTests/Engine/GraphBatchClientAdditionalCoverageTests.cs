@@ -9,6 +9,8 @@ namespace Mgx.IntegrationTests.Engine;
 /// <summary>
 /// Additional coverage tests for GraphBatchClient.
 /// </summary>
+// Touches MgxCmdletBase and pipeline statics, so it must not run beside the injected-mock tests
+[Collection("Pipeline")]
 public class GraphBatchClientAdditionalCoverageTests
 {
     [Fact]
@@ -213,7 +215,7 @@ public class GraphBatchClientAdditionalCoverageTests
     }
 
     [Fact]
-    public async Task ExecuteBatchIndexedAsync_MaxRetriesExceeded_ReturnsFailure()
+    public async Task ExecuteBatchIndexedAsync_MaxRetriesExceeded_ReturnsChunkFailure()
     {
         var attempts = 0;
         var handler = new StubHttpMessageHandler().Enqueue(request =>
@@ -241,11 +243,12 @@ public class GraphBatchClientAdditionalCoverageTests
 
         var batch = new GraphBatchClient(client, "https://graph.microsoft.com/v1.0", 1, 1, 0);
 
-        // After max retries, it should throw GraphServiceException
-        await Assert.ThrowsAsync<GraphServiceException>(async () =>
-            await batch.ExecuteBatchIndexedAsync([new BatchOperation("/users/1", "GET")], CancellationToken.None));
+        // After max retries the chunk failure is returned rather than thrown, so results of
+        // chunks that already landed survive it
+        var result = await batch.ExecuteBatchIndexedAsync(
+            [new BatchOperation("/users/1", "GET")], CancellationToken.None);
 
-        // The retry logic may only retry once for 5xx on GET in batch
+        Assert.IsType<GraphServiceException>(result.ChunkFailure);
         Assert.True(attempts >= 1);
     }
 }

@@ -28,6 +28,11 @@ jobs:
       - name: Restore Dependencies
         run: dotnet restore Mgx.slnx
 
+      # build.ps1 regenerates the compiled help and fails when platyPS is missing.
+      - name: Install platyPS
+        shell: pwsh
+        run: Install-PSResource -Name platyPS -Scope AllUsers -TrustRepository
+
       # Stages the module into Modules/M365DSC.mgx, which the Pester tests below run against.
       - name: Build Module
         shell: pwsh

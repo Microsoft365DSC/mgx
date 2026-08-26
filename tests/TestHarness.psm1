@@ -45,7 +45,7 @@ function Invoke-TestHarness
             Run the Pester test suite for the mgx module.
 
         .PARAMETER TestResultsFile
-            NUnit XML results path. Defaults to Tests/TestResults.xml.
+            NUnit XML results path. Defaults to tests/TestResults.xml.
 
         .PARAMETER IgnoreCodeCoverage
             Skip code coverage. Coverage of a binary module from Pester is not
@@ -71,7 +71,13 @@ function Invoke-TestHarness
 
         [Parameter()]
         [System.String]
-        $TestPath = (Join-Path $PSScriptRoot 'Unit')
+        $TestPath = (Join-Path $PSScriptRoot 'Unit'),
+
+        # Live-tagged blocks need a real Graph session. They are excluded by default so CI
+        # and a cold clone both pass; pass this to run them against a connected tenant.
+        [Parameter()]
+        [Switch]
+        $IncludeLive
     )
 
     $pesterModule = Get-Module -Name Pester -ListAvailable |
@@ -98,6 +104,10 @@ function Invoke-TestHarness
 
     $configuration = New-PesterConfiguration
     $configuration.Run.Path = $TestPath
+    if (-not $IncludeLive.IsPresent)
+    {
+        $configuration.Filter.ExcludeTag = 'Live'
+    }
     $configuration.Run.PassThru = $true
     $configuration.Output.Verbosity = 'Detailed'
     $configuration.TestResult.Enabled = $true

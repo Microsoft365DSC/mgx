@@ -65,6 +65,13 @@ public sealed class ResilientGraphClientOptions
     /// <summary>Set to true to disable the rate limiter entirely. Default: false.</summary>
     public bool NoRateLimit { get; init; }
 
+    /// <summary>
+    /// Set to true to disable adaptive request pacing (AIMD back-off, slow start, and
+    /// throttle-proximity damping). Independent of NoRateLimit: the token bucket is the hard
+    /// backstop, the pacer is the proactive layer in front of it. Default: false (pacing ON).
+    /// </summary>
+    public bool NoAdaptivePacing { get; init; }
+
     /// <summary>Maximum queue depth before rejecting requests. Range: 0-100,000. Default: 500.</summary>
     public int RateLimitQueueLimit
     {
@@ -154,7 +161,10 @@ public sealed class ResilientGraphClientOptions
     /// <summary>
     /// Target throughput for batch item pacing in items/sec. Range: 0-1000. Default: 20.
     /// Controls inter-chunk delay in sequential batch execution to avoid burst-and-stall
-    /// against Graph's server-side write throttle (~20 items/sec for directory objects).
+    /// against Graph's server-side write throttle (~20 writes/sec sustained for directory
+    /// objects). Note: Graph throttles WRITES, not items - a compound item (e.g. a group
+    /// create with 20 members@odata.bind) costs ~21 writes, so divide the budget by the
+    /// item's write cost. See about_Mgx_Tuning "WRITE COST".
     /// Set to 0 to disable pacing. Does not affect the HTTP-level rate limiter.
     /// </summary>
     public int BatchItemsPerSecond

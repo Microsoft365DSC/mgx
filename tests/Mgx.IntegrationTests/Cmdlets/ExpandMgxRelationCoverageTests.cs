@@ -12,6 +12,8 @@ namespace Mgx.IntegrationTests.Cmdlets;
 /// Coverage tests for Expand-MgxRelation cmdlet (unit-testable paths only).
 /// Tests requiring GraphSession are in E2ETests with WireMock.
 /// </summary>
+// Hosts cmdlets through MgxTestHost, which sets the shared transport and client options
+[Collection("Pipeline")]
 public class ExpandMgxRelationCoverageTests
 {
     // Use reflection to test private methods - cast to non-nullable since we control the test setup

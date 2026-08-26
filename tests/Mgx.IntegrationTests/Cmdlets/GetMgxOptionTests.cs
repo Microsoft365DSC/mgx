@@ -7,6 +7,8 @@ namespace Mgx.IntegrationTests.Cmdlets;
 /// <summary>
 /// Tests for Get-MgxOption cmdlet.
 /// </summary>
+// Touches MgxCmdletBase and pipeline statics, so it must not run beside the injected-mock tests
+[Collection("Pipeline")]
 public class GetMgxOptionTests
 {
     [Fact]

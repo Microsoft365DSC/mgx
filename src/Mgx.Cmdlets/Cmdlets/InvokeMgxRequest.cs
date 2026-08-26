@@ -14,7 +14,8 @@ namespace Mgx.Cmdlets.Cmdlets;
 /// <summary>
 /// Invoke-MgxRequest: General-purpose resilient client for any Microsoft Graph endpoint.
 /// Supports streaming pagination, fan-out concurrency, write operations, and checkpoint/resume.
-/// For bulk writes (>10 items), consider Invoke-MgxBatchRequest which is 3-4x faster.
+/// For bulk writes (>10 items), consider Invoke-MgxBatchRequest (measured ~1.5x faster
+/// than fan-out for PATCH at 1k scale; fewer HTTP round-trips and server-side pacing).
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "MgxRequest", DefaultParameterSetName = "Direct",
     SupportsShouldProcess = true)]
@@ -293,7 +294,11 @@ public class InvokeMgxRequest : MgxCmdletBase
                     includeCount: !string.IsNullOrEmpty(CountVariable) || includeAutoCount,
                     noPageSize: suppressTop);
                 var iterator = new PageIterator(GetClient());
-                var maxItems = (All.IsPresent || Top <= 0) ? 0 : Top;
+                // -All says how far to page, -Top says how much to return, and they are not the
+                // same question: -All used to zero the cap, so asking for a bounded slice of a
+                // large collection walked all of it. Worse, -Top also sets the page size, so the
+                // walk ran at the slice's page size - 150 rows at a time across the whole tenant.
+                var maxItems = Top > 0 ? Top : 0;
                 var headers = BuildHeaders();
                 long itemCount = 0;
 
@@ -597,8 +602,8 @@ public class InvokeMgxRequest : MgxCmdletBase
         for (int i = 0; i < uniqueIds.Count; i++)
             urlToSourceId[urls[i]] = uniqueIds[i];
 
-        // Respect -Top limit per URL
-        var maxItems = (All.IsPresent || Top <= 0) ? 0 : Top;
+        // Respect -Top limit per URL, -All or not.
+        var maxItems = Top > 0 ? Top : 0;
 
         // Pass headers to FetchAllAsync
         var fanOutResult = fanOut.FetchAllAsync(urls, maxItems, headers, CancellationToken)
@@ -764,6 +769,9 @@ public class InvokeMgxRequest : MgxCmdletBase
         {
             var statusCode = (HttpStatusCode)error.StatusCode;
 
+            // A batch result carries no error code, only a status and a message, so a missing
+            // object cannot be told from a missing endpoint here the way it can on the fan-out
+            // path below. This is the write path, where a 404 is the likelier of the two.
             if (statusCode == HttpStatusCode.NotFound)
                 has404 = true;
 
@@ -801,7 +809,10 @@ public class InvokeMgxRequest : MgxCmdletBase
         {
             var statusCode = GetStatusCodeFromException(ex);
 
-            if (statusCode == HttpStatusCode.NotFound)
+            // Only a 404 that might mean "no such endpoint" is worth a beta hint. A 404 naming
+            // a missing object says the path was fine, and hinting over it sends the caller to
+            // re-run against beta for a request that fails there too.
+            if (statusCode == HttpStatusCode.NotFound && !IsObjectMissing(ex))
                 has404 = true;
 
             if (SkipNotFound.IsPresent && statusCode == HttpStatusCode.NotFound)
@@ -940,6 +951,8 @@ public class InvokeMgxRequest : MgxCmdletBase
     /// <summary>
     /// The elements of a Graph collection envelope ({"value":[...]}), or null when the payload is a
     /// single entity. <paramref name="truncated"/> reports whether the envelope carried @odata.nextLink.
+    /// The gate is structural: an entity whose own 'value' property happens to be an array is
+    /// indistinguishable from an envelope and unwraps too (use -Raw to see such a payload whole).
     /// </summary>
     internal static List<JsonElement>? TryUnwrapCollection(JsonElement json, out bool truncated)
     {
@@ -968,7 +981,8 @@ public class InvokeMgxRequest : MgxCmdletBase
 
         if (sourceId != null)
         {
-            // Use unique prefix to avoid collision with Graph entity properties
+            // Unique prefix avoids collision with Graph entity properties. The indexer
+            // overwrites, so a repeated key does not need removing first.
             ht["_MgxSourceId"] = sourceId;
         }
 
@@ -1018,8 +1032,8 @@ public class InvokeMgxRequest : MgxCmdletBase
     }
 
     /// <summary>
-    /// Flatten any IDictionary (Hashtable, ordered dictionary, or the Hashtables the Mgx
-    /// cmdlets emit) into a serializable dictionary, unwrapping nested PowerShell values.
+    /// Flatten any IDictionary (Hashtable or ordered dictionary) into a serializable
+    /// dictionary, unwrapping nested PowerShell values.
     /// </summary>
     internal static Dictionary<string, object?> DictionaryToDict(IDictionary source)
     {

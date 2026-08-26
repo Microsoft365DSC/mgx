@@ -34,6 +34,14 @@ Describe 'mgx module manifest' {
         $script:Manifest.RequiredAssemblies | Should -Contain 'Mgx.Engine.dll'
     }
 
+    It 'does not hard-require Microsoft.Graph.Authentication' {
+        # Auth is discovered reflectively (GraphSession, then Get-MgContext), so the SDK is a
+        # soft dependency: hosts that bring their own Graph auth must be able to import mgx
+        # without it, and installing mgx must not drag a second copy in alongside theirs.
+        # Cmdlets that need a token raise GraphAuthModuleNotLoaded when it is truly absent.
+        $script:Manifest.RequiredModules.Name | Should -Not -Contain 'Microsoft.Graph.Authentication'
+    }
+
     It 'exports cmdlets and no functions' {
         $script:Manifest.ExportedCmdlets.Count | Should -BeGreaterThan 0
         $script:Manifest.ExportedFunctions.Count | Should -Be 0
@@ -135,7 +143,7 @@ Describe 'Format file' {
 
         foreach ($typeName in $declared)
         {
-            $typeName | Should -Match '^Mgx\.Cmdlets\.Models\.'
+            $typeName | Should -Match '^Mgx\.Cmdlets\.Models\.[A-Za-z]+$'
         }
     }
 }

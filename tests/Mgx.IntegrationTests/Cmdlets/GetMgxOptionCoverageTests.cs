@@ -11,6 +11,8 @@ namespace Mgx.IntegrationTests.Cmdlets;
 /// <summary>
 /// Tests for Get-MgxOption cmdlet.
 /// </summary>
+// Hosts cmdlets through MgxTestHost, which sets the shared transport and client options
+[Collection("Pipeline")]
 public class GetMgxOptionCoverageTests
 {
     [Fact]

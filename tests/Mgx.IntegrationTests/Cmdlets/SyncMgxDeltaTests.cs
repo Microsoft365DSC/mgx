@@ -12,6 +12,8 @@ namespace Mgx.IntegrationTests.Cmdlets;
 /// <summary>
 /// Tests for Sync-MgxDelta cmdlet.
 /// </summary>
+// Hosts cmdlets through MgxTestHost, which sets the shared transport and client options
+[Collection("Pipeline")]
 public class SyncMgxDeltaTests
 {
     // Use reflection to test private methods - cast to non-nullable since we control the test setup

@@ -46,11 +46,9 @@ public sealed class PageIterator
     /// Fires <paramref name="onPageComplete"/> after each page is fully yielded.
     /// </summary>
     /// <remarks>
-    /// SkipOnFirstPage uses positional skip, which assumes
-    /// the Graph API returns the same page content on re-fetch. If items were
-    /// added or deleted between crash and resume, positional skip may produce
-    /// duplicates or miss items. This is inherent to skiptoken-based pagination;
-    /// Graph does not provide idempotency tokens for collection endpoints.
+    /// SkipOnFirstPage skips positionally, which assumes Graph returns the same page content on
+    /// re-fetch. Items added or deleted between crash and resume can therefore be duplicated or
+    /// missed. This is inherent to skiptoken pagination, which has no idempotency token.
     /// </remarks>
     public async IAsyncEnumerable<JsonElement> StreamAllWithCountAsync(
         string initialUrl,
@@ -84,12 +82,21 @@ public sealed class PageIterator
             }
 
             // Capture deltaLink from the final page of a delta query response.
-            // Validated against expectedHost before surfacing.
+            // Validated against expectedHost before surfacing. A refused link is dropped, not
+            // thrown: every item has already been delivered by this point, the token simply
+            // does not advance, and the next sync repeats the enumeration - unlike a refused
+            // nextLink, where continuing silently would hand back a partial collection. Say
+            // so, or the caller reports "no delta token received" and misdiagnoses it.
             if (page.DeltaLink != null)
             {
                 var validatedDelta = NextLinkValidator.Validate(page.DeltaLink, expectedHost);
                 if (validatedDelta != null)
                     onDeltaLink?.Invoke(validatedDelta);
+                else if (onDeltaLink != null)
+                    _client.EnqueueWarning(
+                        "The service returned an @odata.deltaLink that failed validation, so the delta "
+                        + "token was not saved. Following it could send the access token to another "
+                        + "host. The next sync will repeat this enumeration from the previous token.");
             }
 
             if (page.Value.Length == 0)
@@ -119,7 +126,7 @@ public sealed class PageIterator
                     yield break;
             }
 
-            nextLink = NextLinkValidator.Validate(page.NextLink, expectedHost);
+            nextLink = NextLinkValidator.ValidateOrThrow(page.NextLink, expectedHost);
             isFirstPage = false;
 
             onPageComplete?.Invoke(new PageCompletedInfo(nextLink));

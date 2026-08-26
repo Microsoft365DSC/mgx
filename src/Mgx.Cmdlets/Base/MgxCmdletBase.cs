@@ -1,8 +1,8 @@
 using System.Collections;
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Management.Automation;
 using System.Net;
-using System.Globalization;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -15,7 +15,7 @@ namespace Mgx.Cmdlets.Base;
 /// <summary>
 /// Lightweight base class for Mgx cmdlets that need Graph client access.
 /// Provides auth and client lifecycle on top of <see cref="MgxCmdletCore"/>,
-/// which supplies cancellation, disposal, and JSON-to-Hashtable conversion.
+/// which supplies cancellation, disposal, and JSON-to-PSObject conversion.
 /// Used by Invoke-MgxRequest and Invoke-MgxBatchRequest.
 /// </summary>
 public abstract class MgxCmdletBase : MgxCmdletCore
@@ -40,9 +40,8 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     internal static volatile ResilientGraphClientOptions s_clientOptions = ResilientGraphClientOptions.Default;
 
     /// <summary>
-    /// Test-only transport override. When set, <see cref="GetClient"/> builds on the supplied
-    /// HttpClient and skips auth discovery, the Graph SDK reflection path and endpoint detection.
-    /// Shipping code never assigns it.
+    /// Test-only transport override. When set, GetClient builds on the supplied HttpClient and
+    /// skips auth discovery, the Graph SDK reflection path and endpoint detection.
     /// </summary>
     internal static volatile Func<HttpClient>? s_testTransportFactory;
 
@@ -62,18 +61,34 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     {
         if (_client != null) return _client;
 
-        // Sits ahead of the auth check because with no Graph SDK in the process the fingerprint
-        // is empty and the cmdlet would terminate before reaching any HTTP work.
+        // Ahead of the auth check, since with no Graph SDK in the process the fingerprint is
+        // empty and the cmdlet would terminate before reaching any HTTP work
         var testTransport = s_testTransportFactory;
         if (testTransport != null)
+        {
+            // The supplied client is mgx-owned and has no redirect handler, so the content path
+            // may use it
+            s_ownsHttpClient = true;
             return _client = ConfigureClient(testTransport(), s_clientOptions);
+        }
 
         var identity = GetCurrentAuthIdentity(WriteVerbose);
         if (string.IsNullOrEmpty(identity.Fingerprint))
         {
+            // Microsoft.Graph.Authentication is a soft dependency, so an empty fingerprint has two
+            // causes needing different advice: the module is absent, or it is present but
+            // disconnected
+            var (message, errorId) = IsGraphAuthLoaded()
+                ? ("Not connected to Microsoft Graph. Run Connect-MgGraph first.",
+                   "NotConnected")
+                : ("Microsoft.Graph.Authentication is not loaded. Install it "
+                   + "(Install-PSResource -Name Microsoft.Graph.Authentication) and run "
+                   + "Connect-MgGraph, or supply your own transport via Enable-MgxResilience.",
+                   "GraphAuthModuleNotLoaded");
+
             ThrowTerminatingError(new ErrorRecord(
-                new InvalidOperationException("Not connected to Microsoft Graph. Run Connect-MgGraph first."),
-                "NotConnected",
+                new InvalidOperationException(message),
+                errorId,
                 ErrorCategory.ConnectionError,
                 null));
             return null!;
@@ -120,13 +135,9 @@ public abstract class MgxCmdletBase : MgxCmdletCore
                         + $"{Shorten(identity.Fingerprint)}). Rebuilding the Mgx HTTP client.");
                 }
 
-                // Reset-before-Build is intentional here (unlike TryPreInitHttpClient which
-                // builds first then resets). GetClient() has a fallback path (SDK client), so
-                // resetting circuit breaker state from the old tenant before attempting to build
-                // is safe: if BuildCleanHttpClient fails, GetSdkHttpClientFallback provides a
-                // working client. If both fail, ThrowTerminatingError is the correct response.
-                // Only on a real credential change: a same-identity reconnect should keep its
-                // warm rate limiter instead of earning a fresh burst allowance.
+                // Resetting before the build is safe because GetClient falls back to the SDK
+                // client. Only on a real credential change, so a same-identity reconnect keeps
+                // its warm rate limiter instead of earning a fresh burst allowance
                 if (credentialChanged) ResiliencePipelineFactory.Reset();
                 // Schedule delayed disposal: in-flight ResilientGraphClient instances
                 // may still hold a reference to the old client via their constructor
@@ -174,8 +185,8 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     }
 
     /// <summary>
-    /// Wraps an HttpClient in a <see cref="ResilientGraphClient"/> wired to this cmdlet's output
-    /// streams. Shared by the production and test transport paths so both are wired identically.
+    /// Wraps an HttpClient in a ResilientGraphClient wired to this cmdlet's output streams.
+    /// Shared by the production and test transport paths so both are wired identically.
     /// </summary>
     private ResilientGraphClient ConfigureClient(HttpClient httpClient, ResilientGraphClientOptions options)
     {
@@ -315,6 +326,34 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     }
 
     /// <summary>
+    /// Whether Microsoft.Graph.Authentication is present in the session. It is a soft dependency,
+    /// so absent has to be told apart from present but disconnected.
+    /// <para>
+    /// Checks the type first, then Get-MgContext, since the module can be loaded even when
+    /// GraphSession is not where we look.
+    /// </para>
+    /// </summary>
+    internal static bool IsGraphAuthLoaded()
+    {
+        if (FindType("Microsoft.Graph.PowerShell.Authentication.GraphSession") != null)
+            return true;
+
+        try
+        {
+            using var ps = PowerShell.Create(RunspaceMode.CurrentRunspace);
+            ps.AddCommand("Get-Command")
+              .AddParameter("Name", "Get-MgContext")
+              .AddParameter("ErrorAction", "SilentlyContinue");
+            return ps.Invoke().Count > 0;
+        }
+        catch
+        {
+            // No runspace (hosted/test process) means no module either.
+            return false;
+        }
+    }
+
+    /// <summary>
     /// The HttpClient the Microsoft.Graph SDK is currently using, or null when it is not
     /// initialized. Used to detect that a borrowed SDK client has been replaced underneath us.
     /// </summary>
@@ -354,11 +393,8 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     }
 
     /// <summary>
-    /// Builds an auth-only HttpClient using MSAL's AuthenticationHandler from the Graph SDK.
-    /// Token lifecycle: MSAL's AuthenticationHandler refreshes tokens proactively
-    /// (5 min before expiry). For operations spanning 2+ hours, token refresh is
-    /// transparent as long as the Connect-MgGraph session remains valid and the
-    /// refresh token has not been revoked.
+    /// Builds an auth-only HttpClient from the Graph SDK MSAL AuthenticationHandler, which
+    /// refreshes tokens five minutes before expiry, so long operations stay authenticated.
     /// </summary>
     private HttpClient? BuildCleanHttpClient(int totalTimeoutSeconds) =>
         BuildCleanHttpClient(WriteWarning, WriteVerbose, totalTimeoutSeconds);
@@ -479,12 +515,8 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     }
 
     /// <summary>
-    /// Pre-initializes Mgx's static HTTP client before any SDK probe runs.
-    /// Called by Enable-MgxResilience before ForceInitializeAndGetClient as a
-    /// performance optimization: builds the clean client while AzureADEndpoint
-    /// is still intact, avoiding the save/restore overhead on subsequent calls.
-    /// The root cause fix (RestoreAzureADEndpoint in ForceInitializeAndGetClient)
-    /// handles the auth poisoning; this method is a belt-and-suspenders optimization.
+    /// Pre-initializes the static HTTP client before any SDK probe runs. Building it while
+    /// AzureADEndpoint is still intact avoids the save and restore overhead on later calls.
     /// </summary>
     internal static void TryPreInitHttpClient(Action<string> warn, Action<string> verbose)
     {
@@ -672,6 +704,14 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     }
 
     /// <summary>
+    /// Whether the active transport is the mgx-owned clean client (AllowAutoRedirect off)
+    /// rather than the borrowed SDK client. The content path requires ownership: the SDK
+    /// client ships a RedirectHandler that auto-follows a content 302 to a host mgx never
+    /// validated, so Get-MgxContent fails closed when this is false.
+    /// </summary>
+    protected static bool TransportIsOwned => s_ownsHttpClient;
+
+    /// <summary>
     /// Drain buffered verbose messages from the resilience pipeline.
     /// Must be called on the pipeline thread (after .GetAwaiter().GetResult() returns).
     /// OnRetry fires on thread pool threads after Task.Delay, so WriteVerbose cannot
@@ -707,28 +747,234 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     }
 
     /// <summary>
-    /// Unwrap a PSObject to the .NET value underneath (string, Hashtable, ...). A
-    /// PSCustomObject is returned as its PSObject: its members live on the PSObject,
-    /// and its BaseObject is an empty PSCustomObject marker that carries nothing.
+    /// True when nothing else holds the file. FileShare.None is honored between .NET processes
+    /// on both Windows and Unix, so a writer that has it open makes this fail rather than let a
+    /// sweep take a file out from under it.
     /// </summary>
-    protected internal static object UnwrapPSObject(object input) =>
-        input is PSObject pso && pso.BaseObject is not PSObject and not PSCustomObject
-            ? pso.BaseObject
-            : input;
+    private static bool CanTakeExclusively(string path)
+    {
+        try
+        {
+            using var _ = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>
-    /// Read a named member from pipeline input, whether it is a Hashtable (what the
-    /// Graph cmdlets emit), a PSObject-wrapped dictionary, or a PSCustomObject.
+    /// Remove leftover "{outputPath}.{guid}.tmp" files. Called only when no resume is pending,
+    /// where every such file is an orphan by definition - except one a live run still holds,
+    /// which CanTakeExclusively keeps out of reach.
     /// </summary>
-    protected internal static object? TryGetMember(object? input, string name)
+    protected void DeleteStaleTemps(string outputPath)
     {
-        if (input is PSObject wrapper && wrapper.BaseObject is IDictionary baseDict)
-            return baseDict[name];
-        if (input is IDictionary dict)
-            return dict[name];
-        if (input is PSObject pso)
-            return pso.Properties[name]?.Value;
-        return null;
+        try
+        {
+            var dir = Path.GetDirectoryName(outputPath);
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
+            foreach (var stale in Directory.EnumerateFiles(dir, Path.GetFileName(outputPath) + ".*.tmp").ToList())
+            {
+                // "Orphan" is an assumption about a file this run did not create, and a second
+                // export running against the same output right now owns a file matching the same
+                // glob. Windows refuses to delete a file someone holds open, so it declined by
+                // accident; Unix does not, and the other run went on writing into an unlinked
+                // inode and lost everything it had fetched. Ask for the file exclusively first -
+                // if that fails, someone is using it and it is not an orphan.
+                if (!CanTakeExclusively(stale))
+                {
+                    WriteVerbose($"Left '{Path.GetFileName(stale)}' alone: another run is writing to it.");
+                    continue;
+                }
+                try
+                {
+                    File.Delete(stale);
+                    WriteVerbose($"Deleted an orphaned temp file from an earlier interrupted run: {Path.GetFileName(stale)}");
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    WriteWarning($"Could not delete orphaned temp file '{stale}': {ex.Message}. Delete it manually.");
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best effort; a sweep failure must never stop the run.
+        }
+    }
+
+    /// <summary>
+    /// The temp a checkpoint names, or null when it cannot be used. A checkpoint on disk is
+    /// untrusted input, so the recorded name must be one a run could have written and must not
+    /// be the output itself. The file must also be at least as long as the checkpoint promised.
+    /// </summary>
+    private static string? ResolveNamedTemp(string outputPath, string tempFileName, long dataLength)
+    {
+        if (dataLength <= 0) return null;
+        var dir = Path.GetDirectoryName(outputPath);
+        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return null;
+        if (!string.Equals(tempFileName, Path.GetFileName(tempFileName), StringComparison.Ordinal))
+            return null;
+        if (!IsRunTempName(Path.GetFileName(outputPath), tempFileName)) return null;
+        var tempPath = Path.Combine(dir, tempFileName);
+        if (string.Equals(Path.GetFullPath(tempPath), Path.GetFullPath(outputPath),
+                StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (!File.Exists(tempPath)) return null;
+        if (new FileInfo(tempPath).Length < dataLength) return null;
+        return tempPath;
+    }
+
+    /// <summary>
+    /// True when <paramref name="candidate"/> is a name a fresh run gives its temp:
+    /// the output's own name, a dot, 32 lowercase hex digits (Guid "N"), and ".tmp".
+    /// </summary>
+    private static bool IsRunTempName(string outputFileName, string candidate)
+    {
+        var prefix = outputFileName + ".";
+        const string suffix = ".tmp";
+        if (candidate.Length != prefix.Length + 32 + suffix.Length) return false;
+        if (!candidate.StartsWith(prefix, StringComparison.Ordinal)) return false;
+        if (!candidate.EndsWith(suffix, StringComparison.Ordinal)) return false;
+        for (var i = prefix.Length; i < prefix.Length + 32; i++)
+        {
+            if (candidate[i] is (>= '0' and <= '9') or (>= 'a' and <= 'f')) continue;
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Replace the output with the first <paramref name="dataLength"/> bytes of a named temp,
+    /// then remove the temp. Replacing rather than appending keeps a previous run rows out of
+    /// the output. Taking exactly the recorded file keeps an unrelated leftover from being
+    /// merged in, and counting bytes rather than lines cannot disagree about a torn final line.
+    /// Returns false when the temp is absent or shorter than the checkpoint promised, which
+    /// means the caller must not resume past the items it counted.
+    /// </summary>
+    protected static bool TryPromoteNamedTemp(string outputPath, string tempFileName, long dataLength)
+    {
+        try
+        {
+            var tempPath = ResolveNamedTemp(outputPath, tempFileName, dataLength);
+            if (tempPath == null) return false;
+
+            // Staged like the other forms, so the destination is replaced in one Move rather
+            // than truncated and refilled in place.
+            var adoptPath = outputPath + ".adopt";
+            using (var writer = new FileStream(adoptPath, FileMode.Create, FileAccess.Write))
+            {
+                using var temp = new FileStream(tempPath, FileMode.Open, FileAccess.Read);
+                var buffer = new byte[81920];
+                long remaining = dataLength;
+                while (remaining > 0)
+                {
+                    var read = temp.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+                    if (read <= 0) break;
+                    writer.Write(buffer, 0, read);
+                    remaining -= read;
+                }
+                if (remaining > 0)
+                {
+                    writer.Dispose();
+                    File.Delete(adoptPath);
+                    return false;
+                }
+            }
+            File.Move(adoptPath, outputPath, overwrite: true);
+            try { File.Delete(tempPath); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Cut the output back to the length a checkpoint recorded for it, dropping anything the
+    /// interrupted run wrote after its last save. Those items are re-fetched, so dropping them
+    /// is what keeps a resume from duplicating them. Returns false when the output is shorter
+    /// than recorded, which means it is no longer the file the checkpoint describes.
+    /// </summary>
+    protected static bool TryTrimOutputToCheckpoint(string outputPath, long dataLength)
+    {
+        try
+        {
+            // A checkpoint is untrusted input once it is on disk, and SetLength rejects a
+            // negative length with an ArgumentOutOfRangeException the catch below does not
+            // cover - so a hand-edited length escaped as a terminating error naming neither the
+            // checkpoint nor the file, and left itself on disk to fail the same way next run.
+            // ResolveNamedTemp already guards its own length; this is the same guard.
+            if (dataLength < 0) return false;
+            if (!File.Exists(outputPath)) return false;
+            var actual = new FileInfo(outputPath).Length;
+            if (actual < dataLength) return false;
+            if (actual == dataLength) return true;
+            using var fs = new FileStream(outputPath, FileMode.Open, FileAccess.Write);
+            fs.SetLength(dataLength);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Recovers a fresh JSONL run interrupted before its temp was promoted, from a checkpoint
+    /// predating the recorded temp name and length. With only a line count and the newest
+    /// matching temp to go on, this is safe only when no output exists, since everything the run
+    /// wrote is then in its temp. Against an existing output there is no way to tell whose items
+    /// the temp holds and the caller must re-enumerate. Copies exactly
+    /// <paramref name="itemCount"/> lines, then removes the temp. Returns false when nothing
+    /// usable exists.
+    /// </summary>
+    protected static bool TryAdoptOrphanedTemp(string outputPath, long itemCount)
+    {
+        try
+        {
+            if (itemCount <= 0) return false;
+            if (File.Exists(outputPath)) return false;
+            var dir = Path.GetDirectoryName(outputPath);
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return false;
+            var temp = Directory.EnumerateFiles(dir, Path.GetFileName(outputPath) + ".*.tmp")
+                .Select(p => new FileInfo(p))
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .FirstOrDefault();
+            if (temp == null) return false;
+
+            // Staged so the output appears in one Move. A merge that dies halfway leaves only
+            // the staging file behind, and the caller keeps its checkpoint - the safe direction.
+            long copied = 0;
+            var adoptPath = outputPath + ".adopt";
+            using (var writer = new StreamWriter(adoptPath, append: false))
+            {
+                using var reader = new StreamReader(temp.FullName);
+                string? line;
+                while (copied < itemCount && (line = reader.ReadLine()) != null)
+                {
+                    writer.WriteLine(line);
+                    copied++;
+                }
+            }
+            if (copied < itemCount)
+            {
+                // Temp holds less than the checkpoint promises - unusable.
+                File.Delete(adoptPath);
+                return false;
+            }
+            File.Move(adoptPath, outputPath, overwrite: true);
+            temp.Delete();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     #region Shared URL and header builders
@@ -829,13 +1075,35 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         $"Wait {s_clientOptions.CircuitBreakerDurationSeconds}s or run Get-MgxTelemetry for details. " +
         $"Tune with Set-MgxOption -CircuitBreakerFailureRatio / -CircuitBreakerMinThroughput.";
 
-    protected void WriteBetaHintIfApplicable(HttpStatusCode statusCode, string apiVersion)
+    /// <summary>
+    /// Codes meaning the path was fine and the object was absent, so a beta hint would send the
+    /// caller to re-run a request that fails there too. Only codes with unambiguous semantics
+    /// belong here. Request_ResourceNotFound does not qualify, since Graph returns it both for a
+    /// missing directory object and for a beta-only segment on v1.0, so the hedged hint stays.
+    /// </summary>
+    private static readonly HashSet<string> ObjectMissingCodes = new(StringComparer.OrdinalIgnoreCase)
     {
-        if (statusCode == HttpStatusCode.NotFound &&
-            string.Equals(apiVersion, "v1.0", StringComparison.OrdinalIgnoreCase))
-        {
-            WriteWarning("This endpoint may only be available in beta. Retry with -ApiVersion beta.");
-        }
+        "itemNotFound",
+    };
+
+    /// <summary>True when the exception is a Graph 404 that names a missing object.</summary>
+    protected static bool IsObjectMissing(Exception ex) =>
+        ex is GraphServiceException { StatusCode: HttpStatusCode.NotFound } g
+        && g.ErrorCode != null
+        && ObjectMissingCodes.Contains(g.ErrorCode);
+
+    protected void WriteBetaHintIfApplicable(HttpStatusCode statusCode, string apiVersion,
+        string? errorCode = null)
+    {
+        if (statusCode != HttpStatusCode.NotFound ||
+            !string.Equals(apiVersion, "v1.0", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        // A missing user, group or drive item is not an absent endpoint.
+        if (errorCode != null && ObjectMissingCodes.Contains(errorCode))
+            return;
+
+        WriteWarning("This endpoint may only be available in beta. Retry with -ApiVersion beta.");
     }
 
     protected static ErrorCategory MapStatusToCategory(HttpStatusCode statusCode) => statusCode switch
@@ -864,7 +1132,7 @@ public abstract class MgxCmdletBase : MgxCmdletCore
         {
             case GraphServiceException gex:
                 if (apiVersion != null)
-                    WriteBetaHintIfApplicable(gex.StatusCode, apiVersion);
+                    WriteBetaHintIfApplicable(gex.StatusCode, apiVersion, gex.ErrorCode);
                 WriteError(new ErrorRecord(gex, gex.ErrorCode ?? "GraphError",
                     MapStatusToCategory(gex.StatusCode), target));
                 return true;
@@ -887,15 +1155,34 @@ public abstract class MgxCmdletBase : MgxCmdletCore
 
     // Count discrepancy detection thresholds.
     // Not user-configurable (YAGNI). Change these constants if defaults prove problematic.
-    // 10% tolerance prevents noise from eventual consistency lag;
+    // Undercount: 10% tolerance prevents noise from eventual consistency lag;
     // 100-item floor avoids false alarms on small collections.
+    // Overcount: much tighter (0.5%, 50-item floor) - the observed failure mode is a
+    // duplicated page from a service-side skiptoken overlap (~one $top of extras),
+    // which a symmetric 10% tolerance would never catch at scale.
     protected const double CountDiscrepancyThreshold = 0.9;
     protected const long CountDiscrepancyMinItems = 100;
+    protected const double CountOvershootThreshold = 0.005;
+    protected const long CountOvershootMinItems = 50;
 
     protected void WriteCountDiscrepancyWarning(
         string resource, long reportedCount, long actualCount, string? filter)
     {
         if (reportedCount < CountDiscrepancyMinItems) return;
+
+        if (actualCount > reportedCount)
+        {
+            var overshoot = actualCount - reportedCount;
+            if (overshoot <= Math.Max(CountOvershootMinItems, (long)(reportedCount * CountOvershootThreshold)))
+                return;
+            WriteWarning(
+                $"[{resource}] Graph returned {actualCount} items but reported a count of {reportedCount} "
+                + $"({overshoot} extra). This can indicate a duplicated page during pagination "
+                + "(observed as a transient service-side skiptoken overlap). If the output feeds a "
+                + "downstream system, deduplicate on 'id'.");
+            return;
+        }
+
         if (actualCount >= (long)(reportedCount * CountDiscrepancyThreshold)) return;
 
         var pct = reportedCount > 0 ? (int)((1.0 - (double)actualCount / reportedCount) * 100) : 0;

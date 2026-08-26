@@ -29,6 +29,23 @@ internal static partial class GraphRequestTracer
     private static partial Regex SensitiveJsonValue();
 
     /// <summary>
+    /// A pre-authenticated URL is a credential whose property name does not say so, so match on
+    /// the value instead. Matching every URL would redact @odata.nextLink, which paging bugs are
+    /// diagnosed with.
+    /// </summary>
+    [GeneratedRegex("\"(https?://[^\"]*?(?:tempauth|guestaccesstoken|authkey|X-Amz-Signature|(?<![a-z])sig)=)[^\"]*\"",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex CapabilityUrlValue();
+
+    /// <summary>
+    /// Property names carrying a pre-authenticated URL whose capability sits in the path rather
+    /// than in a recognizable parameter.
+    /// </summary>
+    [GeneratedRegex("\"([^\"]*downloadurl[^\"]*)\"\\s*:\\s*\"[^\"]*\"",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex DownloadUrlProperty();
+
+    /// <summary>
     /// Trace line for an outgoing request. <paramref name="attempt"/> is 1-based so retries are visible.
     /// </summary>
     internal static string FormatRequest(HttpRequestMessage request, byte[]? body, int attempt)
@@ -39,8 +56,8 @@ internal static partial class GraphRequestTracer
           .Append(request.Method.Method).Append(' ').Append(request.RequestUri);
 
         sb.AppendLine().Append("  Headers:");
-        // The bearer token is attached further down the pipeline by the auth handler,
-        // so it is not on this HttpRequestMessage. Show it for completeness, never its value.
+        // The auth handler attaches the bearer token further down the pipeline, so it is not on
+        // this message. Shown for completeness, never its value
         sb.AppendLine().Append("    Authorization: Bearer <redacted>");
         foreach (var header in request.Headers)
             sb.AppendLine().Append("    ").Append(header.Key).Append(": ").Append(Join(header.Value));
@@ -76,7 +93,8 @@ internal static partial class GraphRequestTracer
         {
             sb.AppendLine().Append("  Headers:");
             foreach (var header in headers)
-                sb.AppendLine().Append("    ").Append(header.Key).Append(": ").Append(Join(header.Value));
+                sb.AppendLine().Append("    ").Append(header.Key).Append(": ")
+                  .Append(RedactHeaderValue(header.Key, Join(header.Value)));
         }
 
         if (!string.IsNullOrEmpty(body))
@@ -95,10 +113,28 @@ internal static partial class GraphRequestTracer
 
     private static string Join(IEnumerable<string> values) => string.Join(", ", values);
 
-    /// <summary>Redact credential-looking JSON properties, then truncate.</summary>
+    /// <summary>
+    /// A content 302 Location grants the file bytes without a bearer token, so tracing it
+    /// verbatim writes a live credential. Keep only scheme and host, which is the diagnostic
+    /// value of the header. The JSON body redaction cannot reach header values.
+    /// </summary>
+    private static string RedactHeaderValue(string name, string value)
+    {
+        if (!name.Equals("Location", StringComparison.OrdinalIgnoreCase)) return value;
+        return Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            ? $"{uri.Scheme}://{uri.IdnHost}/<redacted>"
+            : "<redacted>";
+    }
+
+    /// <summary>Redact credential-looking JSON properties and pre-authenticated URLs, then truncate.</summary>
     private static string Sanitize(string body)
     {
         var redacted = SensitiveJsonValue().Replace(body, "\"$1\": \"<redacted>\"");
+        // Property-name match first, covering a downloadUrl whose capability sits in the path
+        redacted = DownloadUrlProperty().Replace(redacted, "\"$1\": \"<redacted>\"");
+        // Then any URL value carrying a capability parameter, keeping the parameter name visible
+        // so the trace still shows which kind of URL was redacted
+        redacted = CapabilityUrlValue().Replace(redacted, "\"$1<redacted>\"");
         return redacted.Length <= MaxBodyChars
             ? redacted
             : redacted[..MaxBodyChars] + $"... [truncated, {redacted.Length - MaxBodyChars} more chars]";

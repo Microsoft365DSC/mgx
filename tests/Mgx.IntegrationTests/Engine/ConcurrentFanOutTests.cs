@@ -105,7 +105,7 @@ public class ConcurrentFanOutTests
     }
 
     [Fact]
-    public async Task A_nextLink_pointing_elsewhere_ends_that_url_without_failing_it()
+    public async Task A_nextLink_pointing_elsewhere_fails_that_url()
     {
         var handler = RoutedBy(_ => Json(HttpStatusCode.OK,
             """{"value":[{"id":"a"}],"@odata.nextLink":"https://evil.example.com/v1.0/x"}"""));
@@ -115,8 +115,8 @@ public class ConcurrentFanOutTests
         var url = $"{Host}/v1.0/groups/g1/members";
         var result = await fanOut.FetchAllAsync([url], cancellationToken: Ct);
 
-        Assert.False(result.HasErrors);
-        Assert.Single(result.Results[url]);
+        // A refused nextLink is an error for that url, not a short but successful result
+        Assert.True(result.HasErrors);
     }
 
     [Fact]

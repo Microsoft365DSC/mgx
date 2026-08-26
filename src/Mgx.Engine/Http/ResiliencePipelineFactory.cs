@@ -48,10 +48,11 @@ public static class ResiliencePipelineFactory
             if (s_pipeline != null && ReferenceEquals(s_cachedOptions, options))
                 return (s_pipeline, s_rateLimiter);
 
-            // Schedule delayed disposal of the old rate limiter. It may still be
-            // referenced by in-flight ResilientGraphClient instances, so we wait
-            // TotalTimeoutSeconds to ensure all in-flight requests have completed.
-            ScheduleDelayedDispose(s_rateLimiter, options.TotalTimeoutSeconds);
+            // Not disposed. Every ResilientGraphClient already built from it holds the limiter
+            // as a readonly field, as does the handler Enable-MgxResilience injects into the SDK,
+            // and that handler is not rebuilt when options change. No request-based delay bounds
+            // that, since a client may hold its limiter for a multi-hour export. Dropping the
+            // reference is enough, the limiter owns no unmanaged handle
 
             TokenBucketRateLimiter? rateLimiter = null;
             if (!options.NoRateLimit)
@@ -71,6 +72,10 @@ public static class ResiliencePipelineFactory
             s_rateLimiter = rateLimiter;
             s_cachedOptions = options;
 
+            // The chokepoint every client build passes through: apply pacing configuration
+            // here so Set-MgxOption changes reach the pacer on the next invocation.
+            AdaptiveRequestPacer.Configure(options);
+
             return (s_pipeline, rateLimiter);
         }
     }
@@ -86,9 +91,16 @@ public static class ResiliencePipelineFactory
             s_pipeline = null;
             // Dispose after delay: in-flight clients may still reference the old limiter.
             // Default 300s covers the maximum total timeout window.
-            ScheduleDelayedDispose(s_rateLimiter, s_cachedOptions?.TotalTimeoutSeconds ?? 300);
+            // Not disposed, for the reason documented in GetOrCreate.
             s_rateLimiter = null;
             s_cachedOptions = null;
+            // Learned pacing state describes the old tenant; clear it with the CB history.
+            AdaptiveRequestPacer.Reset();
+            // GraphBatchClient keeps its own AIMD state in separate statics, so clearing the
+            // request pacer alone left the batch pacer describing the previous tenant: a fresh
+            // credential started at the throttled item rate learned elsewhere, and its first
+            // batch was additionally delayed by the old tenant's completion timestamp.
+            GraphBatchClient.ResetPacingState();
         }
     }
 
@@ -98,14 +110,6 @@ public static class ResiliencePipelineFactory
     /// cause ObjectDisposedException in in-flight clients, so we wait for the total
     /// timeout window to expire before disposing.
     /// </summary>
-    private static void ScheduleDelayedDispose(TokenBucketRateLimiter? limiter, int delaySeconds)
-    {
-        if (limiter == null) return;
-        _ = Task.Delay(TimeSpan.FromSeconds(delaySeconds)).ContinueWith(_ =>
-        {
-            try { limiter.Dispose(); } catch { /* best-effort cleanup */ }
-        }, TaskScheduler.Default);
-    }
 
     private static ResiliencePipeline<HttpResponseMessage> BuildPipeline(ResilientGraphClientOptions options)
     {
@@ -192,6 +196,18 @@ public static class ResiliencePipelineFactory
                     var retryAfter = response?.Headers.RetryAfter;
                     var attempt = args.AttemptNumber;
                     var retryDelay = args.RetryDelay;
+
+                    // Feed the pacer BEFORE the response is disposed below - the request URI
+                    // and Retry-After are unreadable afterwards. Retried 429s never reach the
+                    // SendAsync success path, so this is the only place they are observed.
+                    if (status == (HttpStatusCode)429)
+                    {
+                        TimeSpan? serverDelay = retryAfter?.Delta
+                            ?? (retryAfter?.Date is { } date ? date - DateTimeOffset.UtcNow : null);
+                        AdaptiveRequestPacer.RecordThrottle(
+                            AdaptivePacing.Classify(response?.RequestMessage?.RequestUri?.ToString()),
+                            serverDelay);
+                    }
 
                     // Dispose the previous response to drain the connection back to the pool.
                     // With HttpCompletionOption.ResponseHeadersRead, the body stream stays open

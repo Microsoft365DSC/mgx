@@ -259,7 +259,7 @@ public class GraphBatchClientTests
     }
 
     [Fact]
-    public async Task A_failing_batch_POST_surfaces_as_a_graph_error()
+    public async Task A_failing_batch_POST_is_returned_as_a_chunk_failure()
     {
         var handler = new StubHttpMessageHandler();
         handler.EnqueueRepeated(5, _ => new HttpResponseMessage(HttpStatusCode.Forbidden)
@@ -270,9 +270,13 @@ public class GraphBatchClientTests
         var (batch, client, http) = NewBatchClient(handler);
         using var _ = http; using var __ = client;
 
-        var ex = await Assert.ThrowsAsync<GraphServiceException>(
-            () => batch.ExecuteBatchIndexedAsync([new BatchOperation("/users/u0")], Ct));
+        // The chunk POST failure is handed back rather than thrown, so results of chunks that
+        // already landed are not discarded with it
+        var result = await batch.ExecuteBatchIndexedAsync([new BatchOperation("/users/u0")], Ct);
+
+        var ex = Assert.IsType<GraphServiceException>(result.ChunkFailure);
         Assert.Equal(HttpStatusCode.Forbidden, ex.StatusCode);
+        Assert.Single(result.NotSent);
     }
 
     [Fact]

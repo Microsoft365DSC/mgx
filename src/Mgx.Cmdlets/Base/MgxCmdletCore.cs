@@ -19,16 +19,33 @@ namespace Mgx.Cmdlets.Base;
 public abstract class MgxCmdletCore : PSCmdlet, IDisposable
 {
     private CancellationTokenSource _cts = new();
+    private readonly CancellationToken _token;
     private int _disposed; // 0 = not disposed, 1 = disposed (Interlocked for thread safety)
 
-    // Regex gate for DateTime parsing: requires YYYY-MM-DDT prefix.
-    // Prevents false positives on version strings, GUIDs, numeric IDs.
+    // DateTime parsing requires a YYYY-MM-DDT prefix, which keeps version strings, GUIDs and
+    // numeric ids from matching
     private static readonly Regex Iso8601Pattern = new(
         @"^\d{4}-\d{2}-\d{2}[T ]", RegexOptions.Compiled);
 
-    protected CancellationToken CancellationToken => _cts.Token;
+    /// <summary>
+    /// The cancellation token for this invocation.
+    /// </summary>
+    /// <remarks>
+    /// A cached copy rather than <c>_cts.Token</c>. StopProcessing cancels and then disposes the
+    /// source, and reading <c>Token</c> on a disposed source is documented to throw. Catch blocks
+    /// unwinding a Ctrl-C read this before deciding whether to promote or delete a temp file, so
+    /// a throw there would skip the cleanup and orphan a partial file. A token struct copied
+    /// before disposal stays usable.
+    /// </remarks>
+    protected CancellationToken CancellationToken => _token;
 
     #region Lifecycle
+
+    protected MgxCmdletCore()
+    {
+        // Copy the token once, while the source is guaranteed alive.
+        _token = _cts.Token;
+    }
 
     protected override void StopProcessing()
     {
@@ -49,8 +66,8 @@ public abstract class MgxCmdletCore : PSCmdlet, IDisposable
 
     public void Dispose()
     {
-        // Thread-safe: StopProcessing (pipeline-stopping thread) and EndProcessing (pipeline thread)
-        // can race. Interlocked ensures only one thread enters the dispose body.
+        // StopProcessing and EndProcessing run on different threads and can race, so Interlocked
+        // lets only one enter the dispose body
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) == 0)
         {
             _cts.Cancel();
@@ -65,7 +82,7 @@ public abstract class MgxCmdletCore : PSCmdlet, IDisposable
     #region JSON conversion
 
     /// <summary>
-    /// Convert a JsonElement to a Hashtable with all properties preserved.
+    /// Convert a JsonElement to a case-insensitive Hashtable with all properties preserved.
     /// </summary>
     protected internal static Hashtable JsonToHashtable(JsonElement element)
     {
@@ -82,8 +99,11 @@ public abstract class MgxCmdletCore : PSCmdlet, IDisposable
 
         foreach (var prop in element.EnumerateObject())
         {
-            // Strip @odata.* transport metadata (nextLink, context, count), but keep
-            // @odata.type verbatim so it matches the Graph response and round-trips on write.
+            // Strip @odata.* transport metadata but keep @odata.type verbatim, since it
+            // round-trips on write and drives polymorphic handling.
+            // @odata.etag changes on every write, so keeping it would make two reads of an
+            // unchanged entity compare unequal and show as drift in Microsoft365DSC. Callers
+            // needing the If-Match tag read it from the raw payload
             if (prop.Name.StartsWith("@odata.", StringComparison.OrdinalIgnoreCase)
                 && !prop.Name.Equals("@odata.type", StringComparison.OrdinalIgnoreCase))
                 continue;
@@ -109,8 +129,8 @@ public abstract class MgxCmdletCore : PSCmdlet, IDisposable
 
         return element.ValueKind switch
         {
-            // The (object) cast is required: without it the conditional unifies to double,
-            // widening every integer and losing precision beyond 2^53.
+            // The (object) cast is required, or the conditional unifies to double and every
+            // integer loses precision beyond 2^53
             JsonValueKind.Number => element.TryGetInt64(out var l) ? (object)l : element.GetDouble(),
             JsonValueKind.True => true,
             JsonValueKind.False => false,
@@ -121,6 +141,34 @@ public abstract class MgxCmdletCore : PSCmdlet, IDisposable
             JsonValueKind.Object => JsonToHashtable(element),
             _ => element.GetRawText()
         };
+    }
+
+    #endregion
+
+    #region Pipeline input helpers
+
+    /// <summary>
+    /// Unwrap a PSObject to the .NET value underneath. A PSCustomObject is returned as its
+    /// PSObject, because its members live there and its BaseObject carries nothing.
+    /// </summary>
+    protected internal static object UnwrapPSObject(object input) =>
+        input is PSObject pso && pso.BaseObject is not PSObject and not PSCustomObject
+            ? pso.BaseObject
+            : input;
+
+    /// <summary>
+    /// Read a named member from pipeline input, whether it is a Hashtable, a
+    /// PSObject-wrapped dictionary, or a PSCustomObject.
+    /// </summary>
+    protected internal static object? TryGetMember(object? input, string name)
+    {
+        if (input is PSObject wrapper && wrapper.BaseObject is IDictionary baseDict)
+            return baseDict[name];
+        if (input is IDictionary dict)
+            return dict[name];
+        if (input is PSObject pso)
+            return pso.Properties[name]?.Value;
+        return null;
     }
 
     #endregion
