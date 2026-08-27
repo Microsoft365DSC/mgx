@@ -50,4 +50,23 @@ public class ArgumentCompleterCoverageTests
 
         Assert.Contains(results, r => r.CompletionText == "High");
     }
+
+    [Fact]
+    public void DeltaPreferCompleter_ProvidesPreferTokens()
+    {
+        var completer = new DeltaPreferCompleter();
+        var results = completer.CompleteArgument("test", "Prefer", "delta", null, new Hashtable());
+
+        Assert.Contains(results, r => r.CompletionText == "deltashowremovedasdeleted");
+        Assert.All(results, r => Assert.False(string.IsNullOrEmpty(r.ToolTip)));
+    }
+
+    [Fact]
+    public void DeltaPreferCompleter_OmitsTheStandaloneHeader()
+    {
+        var completer = new DeltaPreferCompleter();
+        var results = completer.CompleteArgument("test", "Prefer", "", null, new Hashtable());
+
+        Assert.DoesNotContain(results, r => r.CompletionText == "deltaExcludeParent");
+    }
 }

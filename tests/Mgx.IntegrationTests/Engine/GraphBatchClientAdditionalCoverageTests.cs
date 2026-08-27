@@ -37,7 +37,8 @@ public class GraphBatchClientAdditionalCoverageTests
             MaxRetryAttempts = 1,
             CircuitBreakerMinThroughput = 1000,
             AttemptTimeoutSeconds = 10,
-            TotalTimeoutSeconds = 60
+            TotalTimeoutSeconds = 60,
+            MaxRetryAfterSeconds = 1
         });
 
         var batch = new GraphBatchClient(client, "https://graph.microsoft.com/v1.0", 1, 1, 0);
@@ -72,7 +73,8 @@ public class GraphBatchClientAdditionalCoverageTests
             MaxRetryAttempts = 1,
             CircuitBreakerMinThroughput = 1000,
             AttemptTimeoutSeconds = 10,
-            TotalTimeoutSeconds = 60
+            TotalTimeoutSeconds = 60,
+            MaxRetryAfterSeconds = 1
         });
 
         var batch = new GraphBatchClient(client, "https://graph.microsoft.com/v1.0", 1, 1, 0);

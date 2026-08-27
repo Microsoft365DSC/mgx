@@ -54,7 +54,7 @@ public class PartialBatchResultTests
         using var httpClient = new HttpClient(wire);
         using var client = new ResilientGraphClient(httpClient,
             new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAttempts = 1 });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         // 30 operations = two chunks. The first is applied; the second is refused.
         var ops = Enumerable.Range(1, 30)

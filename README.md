@@ -1,4 +1,5 @@
 # Mgx
+
 Microsoft Graph becomes difficult when a PowerShell process turns into a long-running, concurrent, stateful workload operating against a throttled and eventually consistent API. Sequential lookups are slow at scale, long-running requests can hang on dead connections, and scripts that do not explicitly handle throttling or transient failures can lose data or require manual recovery.
 
 Given a large Graph workload, Mgx can execute it efficiently, preserve correctness, adapt to Graph's limits, survive transient failure and state changes, remain observable, and recover without forcing the caller to implement the machinery itself.
@@ -20,11 +21,11 @@ Invoke-MgxRequest /users -All -Property displayName,mail
 
 ## Key Capabilities
 
-* **Performance:** Streaming pagination, concurrent fan-out, and batched writes of up to 20 sub-requests per HTTP call.
-* **Resilience:** Proactive rate limiting, exponential backoff with jitter, circuit breakers, adaptive per-workload request pacing, body-read timeouts, and connection recycling.
-* **Operations:** Streamed JSONL exports with checkpoint/resume, delta sync token management, and resilience injection for existing Graph SDK scripts through `Enable-MgxResilience`.
-* **Content:** File and media downloads with `Get-MgxContent`, whole or by byte range, over a redirect path validated against a host allowlist and followed without the bearer token.
-* **Observability:** Execution metrics via `Get-MgxTelemetry`, including HTTP timing, throttle waits, retries, and resource consumption.
+- **Performance:** Streaming pagination, concurrent fan-out, and batched writes of up to 20 sub-requests per HTTP call.
+- **Resilience:** Proactive rate limiting, exponential backoff with jitter, circuit breakers, adaptive per-workload request pacing, body-read timeouts, and connection recycling.
+- **Operations:** Streamed JSONL exports with checkpoint/resume, delta sync token management, and resilience injection for existing Graph SDK scripts through `Enable-MgxResilience`.
+- **Content:** File and media downloads with `Get-MgxContent`, whole or by byte range, over a redirect path validated against a host allowlist and followed without the bearer token.
+- **Observability:** Execution metrics via `Get-MgxTelemetry`, including HTTP timing, throttle waits, retries, and resource consumption.
 
 ---
 
@@ -34,12 +35,12 @@ Invoke-MgxRequest /users -All -Property displayName,mail
 
 ### Performance & Throughput
 
-| Operation                             |        Mgx | SDK (`Get-MgUser`) | Raw REST (`Invoke-RestMethod`) | Speedup vs SDK |
-| ------------------------------------- | ---------: | -----------------: | -----------------------------: | -------------: |
-| **List 100,000 users**                |  **47.1s** |             53.2s¹ |                          58.5s |           1.1× |
-| **Look up 5,000 users by ID**         |  **98.8s** |             521.0s |                         985.3s |       **5.3×** |
-| **User report** *(1k users + groups)* |  **23.9s** |             107.9s |                         205.8s |       **4.5×** |
-| **Full delta enumeration** *(130,233 items)* | **145.6s** |              - |                              - |              - |
+| Operation                                    |        Mgx | SDK (`Get-MgUser`) | Raw REST (`Invoke-RestMethod`) | Speedup vs SDK |
+| -------------------------------------------- | ---------: | -----------------: | -----------------------------: | -------------: |
+| **List 100,000 users**                       |  **47.1s** |             53.2s¹ |                          58.5s |           1.1× |
+| **Look up 5,000 users by ID**                |  **98.8s** |             521.0s |                         985.3s |       **5.3×** |
+| **User report** *(1k users + groups)*        |  **23.9s** |             107.9s |                         205.8s |       **4.5×** |
+| **Full delta enumeration** *(130,233 items)* | **145.6s** |                  - |                              - |              - |
 
 <sup>¹ Both figures are the SDK at `-PageSize 999`, which is what the benchmark runs. At the SDK's *default* page size the same enumeration takes **about 2.5-3x** as long - measured 3.0x (168.2s against 57.0s), 2.66x and 2.52x on separate runs of the same tenant, which is the spread this figure has — the practical difference is that mgx needs no tuning to be fast, not that it out-runs a tuned SDK on plain enumeration.</sup>
 
@@ -138,8 +139,8 @@ Export 100,000 users to JSONL:
 | Peak working set   |                      305MB |                       **265MB** |                        **555MB** |
 | Managed heap delta |                    +19.8MB |                      **+5.0MB** |                     **+415.7MB** |
 
-* **Low memory footprint:** streaming to a file adds **5MB** to the managed heap over the whole export, against 416MB for the buffer-then-write approach. Peak working set is 265MB against 555MB.
-* **Kill-safe resume:** `Export-MgxCollection` checkpoints progress continuously. After interruption, rerunning the export resumes from the checkpoint without duplicating objects.
+- **Low memory footprint:** streaming to a file adds **5MB** to the managed heap over the whole export, against 416MB for the buffer-then-write approach. Peak working set is 265MB against 555MB.
+- **Kill-safe resume:** `Export-MgxCollection` checkpoints progress continuously. After interruption, rerunning the export resumes from the checkpoint without duplicating objects.
 
 ---
 
@@ -204,15 +205,15 @@ See [`examples/`](examples/) for additional examples.
 
 ## Microsoft.Graph Comparison
 
-| Common Operation             | Standard `Microsoft.Graph`                         | `Mgx`                                                        |
-| ---------------------------- | -------------------------------------------------- | ------------------------------------------------------------ |
-| **Bulk Lookups**             | `$ids \| ForEach-Object { Get-MgUser -UserId $_ }` | `$ids \| Invoke-MgxRequest '/users/{id}'`                    |
-| **Bulk Updates**             | `$ids \| ForEach-Object { Update-MgUser ... }`     | `$urls \| Invoke-MgxBatchRequest -Method PATCH -Body @{...}` |
-| **Exporting Data**           | `$all = Get-MgUser -All; $all \| Export-Csv ...`   | `Export-MgxCollection /users -OutputFile users.jsonl`        |
+| Common Operation             | Standard `Microsoft.Graph`                         | `Mgx`                                                              |
+| ---------------------------- | -------------------------------------------------- | ------------------------------------------------------------------ |
+| **Bulk Lookups**             | `$ids \| ForEach-Object { Get-MgUser -UserId $_ }` | `$ids \| Invoke-MgxRequest '/users/{id}'`                          |
+| **Bulk Updates**             | `$ids \| ForEach-Object { Update-MgUser ... }`     | `$urls \| Invoke-MgxBatchRequest -Method PATCH -Body @{...}`       |
+| **Exporting Data**           | `$all = Get-MgUser -All; $all \| Export-Csv ...`   | `Export-MgxCollection /users -OutputFile users.jsonl`              |
 | **Fault Protection**         | Written per script                                 | Built-in, or added to existing scripts with `Enable-MgxResilience` |
-| **Observability**            | Timed by the caller                                | `Get-MgxTelemetry`                                           |
-| **Dead Connection Handling** | Left to the default HTTP timeouts                  | Body-read timeouts + connection recycling                    |
-| **Beta Endpoints**           | Requires `Microsoft.Graph.Beta`                    | `-ApiVersion beta`                                           |
+| **Observability**            | Timed by the caller                                | `Get-MgxTelemetry`                                                 |
+| **Dead Connection Handling** | Left to the default HTTP timeouts                  | Body-read timeouts + connection recycling                          |
+| **Beta Endpoints**           | Requires `Microsoft.Graph.Beta`                    | `-ApiVersion beta`                                                 |
 
 ---
 
@@ -277,7 +278,7 @@ Graph throttles directory workloads on a **resource-unit budget**, not on reques
 Measured against a 15,779-group test tenant:
 
 | Query shape | RU |
-|---|---|
+| --- | --- |
 | `transitiveMembers?$top=5` | 4 |
 | `transitiveMembers?$top=5&$select=id` | **3** |
 | `groups/{id}` (single read) | 1 |
@@ -302,8 +303,8 @@ Ahead of those four, an **adaptive pacing gate** spaces requests before they are
 
 ### Requirements
 
-* **PowerShell:** 7.4+
-* **Authentication:** `Microsoft.Graph.Authentication` 2.10.0+ for token acquisition. It is not a declared module dependency.
+- **PowerShell:** 7.4+
+- **Authentication:** `Microsoft.Graph.Authentication` 2.10.0+ for token acquisition. It is not a declared module dependency.
 
 ### Build from Source
 

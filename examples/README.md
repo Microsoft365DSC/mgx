@@ -17,7 +17,7 @@ Connect-MgGraph -Scopes "User.Read.All", "Group.Read.All"   # adjust scopes per 
 ### Getting Started (`getting-started/`)
 
 | Script | Description | Scopes |
-|--------|-------------|--------|
+| -------- | ------------- | -------- |
 | [get-all-users.ps1](getting-started/get-all-users.ps1) | Stream all users to the console | `User.Read.All` |
 | [export-users-to-jsonl.ps1](getting-started/export-users-to-jsonl.ps1) | Export all users to a JSONL file with checkpoint/resume | `User.Read.All` |
 | [beta-endpoint.ps1](getting-started/beta-endpoint.ps1) | Access beta endpoints without installing extra modules | `User.Read.All` |
@@ -25,7 +25,7 @@ Connect-MgGraph -Scopes "User.Read.All", "Group.Read.All"   # adjust scopes per 
 ### Fan-Out & Relations (`fan-out-and-relations/`)
 
 | Script | Description | Scopes |
-|--------|-------------|--------|
+| -------- | ------------- | -------- |
 | [get-managers-fan-out.ps1](fan-out-and-relations/get-managers-fan-out.ps1) | Fetch every user's manager concurrently | `User.Read.All` |
 | [enrich-users-with-manager.ps1](fan-out-and-relations/enrich-users-with-manager.ps1) | Attach manager as a property on each user object | `User.Read.All` |
 | [chained-relation-expansion.ps1](fan-out-and-relations/chained-relation-expansion.ps1) | Enrich users with manager + licenses in one pass | `User.Read.All` |
@@ -34,7 +34,7 @@ Connect-MgGraph -Scopes "User.Read.All", "Group.Read.All"   # adjust scopes per 
 ### Reporting & Audit (`reporting-and-audit/`)
 
 | Script | Description | Scopes |
-|--------|-------------|--------|
+| -------- | ------------- | -------- |
 | [disabled-accounts-report.ps1](reporting-and-audit/disabled-accounts-report.ps1) | Report all disabled accounts | `User.Read.All` |
 | [guest-users-report.ps1](reporting-and-audit/guest-users-report.ps1) | Report all guest (external) accounts | `User.Read.All` |
 | [stale-devices-report.ps1](reporting-and-audit/stale-devices-report.ps1) | Report devices inactive for 90+ days | `Device.Read.All` |
@@ -45,7 +45,7 @@ Connect-MgGraph -Scopes "User.Read.All", "Group.Read.All"   # adjust scopes per 
 ### Bulk Writes & Batching (`bulk-writes-and-batching/`)
 
 | Script | Description | Scopes |
-|--------|-------------|--------|
+| -------- | ------------- | -------- |
 | [bulk-update.ps1](bulk-writes-and-batching/bulk-update.ps1) | PATCH multiple users via `$batch` (20 per HTTP call) | `User.ReadWrite.All` |
 | [dead-letter-retry.ps1](bulk-writes-and-batching/dead-letter-retry.ps1) | Bulk create users with dead-letter tracking for failures | `User.ReadWrite.All` |
 | [bulk-delete-whatif.ps1](bulk-writes-and-batching/bulk-delete-whatif.ps1) | Bulk delete stale guests with `-WhatIf` preview | `User.ReadWrite.All` |
@@ -54,22 +54,22 @@ Connect-MgGraph -Scopes "User.Read.All", "Group.Read.All"   # adjust scopes per 
 ### Delta & Sync (`delta-and-sync/`)
 
 | Script | Description | Scopes |
-|--------|-------------|--------|
+| -------- | ------------- | -------- |
 | [delta-sync.ps1](delta-and-sync/delta-sync.ps1) | Full sync on first run, incremental changes thereafter | `User.Read.All` |
 | [drive-delta-resumable.ps1](delta-and-sync/drive-delta-resumable.ps1) | Resumable OneDrive/SharePoint delta sync with checkpointing | `Files.Read.All` |
 | [tenant-change-feed.ps1](delta-and-sync/tenant-change-feed.ps1) | A resumable tenant-wide change feed, baselined with `-Latest` | `Group.Read.All`, `Application.Read.All` |
 
 ### Drive Content (`drive-content/`)
 
-| Script | Description | Scopes |
-|--------|-------------|--------|
+| Script                                                             | Description                                                              | Scopes           |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------ | ---------------- |
 | [partial-content-hash.ps1](drive-content/partial-content-hash.ps1) | Identify files by hashing a byte range instead of downloading them whole | `Files.Read.All` |
-| [drive-content-triage.ps1](drive-content/drive-content-triage.ps1) | Sniff 4 KB of each file, then download only what survives triage | `Files.Read.All` |
+| [drive-content-triage.ps1](drive-content/drive-content-triage.ps1) | Sniff 4 KB of each file, then download only what survives triage         | `Files.Read.All` |
 
 ### Resilience & Telemetry (`resilience-and-telemetry/`)
 
 | Script | Description | Scopes |
-|--------|-------------|--------|
+| -------- | ------------- | -------- |
 | [resilience-for-existing-scripts.ps1](resilience-and-telemetry/resilience-for-existing-scripts.ps1) | Add retry/circuit breaker to existing SDK scripts (zero code changes) | `User.Read.All` |
 | [resilience-status.ps1](resilience-and-telemetry/resilience-status.ps1) | Check, enable, and disable SDK resilience injection | `User.Read.All` |
 | [telemetry.ps1](resilience-and-telemetry/telemetry.ps1) | View request counts, retries, and throttle events for the session | `User.Read.All` |
@@ -82,7 +82,7 @@ Connect-MgGraph -Scopes "User.Read.All", "Group.Read.All"   # adjust scopes per 
 Every Mgx cmdlet is demonstrated in at least one script:
 
 | Cmdlet | Scripts |
-|--------|---------|
+| -------- | --------- |
 | `Invoke-MgxRequest` | get-all-users, beta-endpoint, get-managers-fan-out, enrich-users-with-manager, chained-relation-expansion, group-members-multipage, disabled-accounts-report, guest-users-report, stale-devices-report, app-secrets-expiry, conditional-access-export, bulk-delete-whatif, partial-content-hash, drive-content-triage, telemetry, tune-rate-limits, tenant-resilience-comparison, resource-unit-budgeting, pacing-observability |
 | `Invoke-MgxBatchRequest` | bulk-update, dead-letter-retry, mixed-endpoint-batch |
 | `Export-MgxCollection` | export-users-to-jsonl, export-sign-in-logs, tenant-resilience-comparison |

@@ -42,7 +42,7 @@ public class RateLimiterBatchTests
             RateLimitPerSecond = 5,
             RateLimitQueueLimit = 50
         });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = new List<BatchOperation>
         {
@@ -110,7 +110,7 @@ public class RateLimiterBatchTests
         {
             try
             {
-                var bc = new GraphBatchClient(client);
+                var bc = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
                 var result = await bc.ExecuteBatchIndexedAsync(operations);
                 Interlocked.Increment(ref successes);
             }

@@ -562,7 +562,7 @@ public class AdaptiveRequestPacerTests
             """{"responses":[{"id":"1","status":200,"body":{"id":"user1"}}]}""");
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batch = new GraphBatchClient(client);
+        var batch = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         MgxTelemetryCollector.Current.Reset();
         // Three back-to-back batch calls: gated traffic at this cadence would trip slow start.

@@ -32,7 +32,7 @@ public class CancellationTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = new List<BatchOperation> { new("/users/user1", "GET") };
 

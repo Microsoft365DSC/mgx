@@ -67,7 +67,7 @@ public class BatchEdgeCaseTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = Enumerable.Range(1, 20)
             .Select(i => new BatchOperation($"/users/user{i}", "GET"))
@@ -103,7 +103,7 @@ public class BatchEdgeCaseTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = Enumerable.Range(1, 20)
             .Select(i => new BatchOperation($"/users/user{i}", "GET"))
@@ -143,7 +143,7 @@ public class BatchEdgeCaseTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = new List<BatchOperation> { new("/users/user1", "GET") };
 
@@ -168,7 +168,7 @@ public class BatchEdgeCaseTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = Enumerable.Range(1, 20)
             .Select(i => new BatchOperation($"/users/user{i}", "GET"))
@@ -198,7 +198,7 @@ public class BatchEdgeCaseTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = Enumerable.Range(1, 21)
             .Select(i => new BatchOperation($"/users/user{i}", "GET"))

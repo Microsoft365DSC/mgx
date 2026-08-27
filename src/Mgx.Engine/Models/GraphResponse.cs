@@ -66,7 +66,7 @@ public sealed class GraphBatchRequestItem
 /// Structured batch operation for GraphBatchClient.
 /// Supports any HTTP method with optional body.
 /// </summary>
-public record BatchOperation(string Url, string Method = "GET", JsonElement? Body = null);
+public record BatchOperation(string Url, string Method = "GET", JsonElement? Body = null, string? Id = null);
 
 /// <summary>Batch response from /$batch endpoint.</summary>
 public sealed class GraphBatchResponse

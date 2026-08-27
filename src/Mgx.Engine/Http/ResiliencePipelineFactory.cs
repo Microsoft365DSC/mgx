@@ -35,10 +35,8 @@ public static class ResiliencePipelineFactory
     internal static readonly ResiliencePropertyKey<Action<string>?> VerboseWriterKey = new("VerboseWriter");
 
     /// <summary>
-    /// Get or create a shared resilience pipeline and rate limiter.
-    /// Rebuilds when options change (detected by reference equality, since
-    /// Set-MgxOption creates a new ResilientGraphClientOptions each time).
-    /// Old rate limiters are disposed after a delay to avoid racing with in-flight clients.
+    /// Get or create a shared resilience pipeline and rate limiter, rebuilding whenever the
+    /// options instance changes.
     /// </summary>
     public static (ResiliencePipeline<HttpResponseMessage> Pipeline, TokenBucketRateLimiter? RateLimiter)
         GetOrCreate(ResilientGraphClientOptions options)
@@ -48,11 +46,8 @@ public static class ResiliencePipelineFactory
             if (s_pipeline != null && ReferenceEquals(s_cachedOptions, options))
                 return (s_pipeline, s_rateLimiter);
 
-            // Not disposed. Every ResilientGraphClient already built from it holds the limiter
-            // as a readonly field, as does the handler Enable-MgxResilience injects into the SDK,
-            // and that handler is not rebuilt when options change. No request-based delay bounds
-            // that, since a client may hold its limiter for a multi-hour export. Dropping the
-            // reference is enough, the limiter owns no unmanaged handle
+            // The retired limiter is never disposed because in-flight clients hold it as a
+            // readonly field for as long as their request runs
 
             TokenBucketRateLimiter? rateLimiter = null;
             if (!options.NoRateLimit)
@@ -89,7 +84,6 @@ public static class ResiliencePipelineFactory
         lock (s_lock)
         {
             s_pipeline = null;
-            // Not disposed, for the reason documented in GetOrCreate
             s_rateLimiter = null;
             s_cachedOptions = null;
             // Learned pacing state describes the old tenant, so clear it with the breaker history
@@ -99,13 +93,6 @@ public static class ResiliencePipelineFactory
             GraphBatchClient.ResetPacingState();
         }
     }
-
-    /// <summary>
-    /// Disposes a rate limiter after a delay. TokenBucketRateLimiter holds an internal
-    /// Timer (via AutoReplenishment) that acts as a GC root. Immediate disposal would
-    /// cause ObjectDisposedException in in-flight clients, so we wait for the total
-    /// timeout window to expire before disposing.
-    /// </summary>
 
     private static ResiliencePipeline<HttpResponseMessage> BuildPipeline(ResilientGraphClientOptions options)
     {

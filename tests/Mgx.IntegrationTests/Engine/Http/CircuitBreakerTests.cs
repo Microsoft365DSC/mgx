@@ -7,6 +7,9 @@ namespace Mgx.IntegrationTests;
 [Collection("Pipeline")]
 public class CircuitBreakerTests
 {
+    /// <summary>Keeps the retry backoff out of the wall clock of a breaker-tripping flood.</summary>
+    private static Dictionary<string, string> NoRetryDelay => new() { ["Retry-After"] = "0" };
+
     // Helper: create low-threshold options so circuit trips fast without long test runs
     private static ResilientGraphClientOptions FastTripOptions(int samplingDurationSeconds = 30) => new()
     {
@@ -14,7 +17,7 @@ public class CircuitBreakerTests
         MaxRetryAttempts = 1,                       // 1 retry = 2 total attempts per call
         CircuitBreakerMinThroughput = 2,             // only need 2 requests to evaluate
         CircuitBreakerFailureRatio = 0.5,            // 50% failures trips the breaker
-        CircuitBreakerDurationSeconds = 5,           // short open window for recovery test
+        CircuitBreakerDurationSeconds = 1,
         CircuitBreakerSamplingDurationSeconds = samplingDurationSeconds,
         TotalTimeoutSeconds = 30,
         AttemptTimeoutSeconds = 10
@@ -25,7 +28,7 @@ public class CircuitBreakerTests
     {
         ResiliencePipelineFactory.Reset();
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.ServiceUnavailable);
+        handler.SetDefaultResponse(HttpStatusCode.ServiceUnavailable, null, NoRetryDelay);
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, FastTripOptions());
@@ -58,7 +61,7 @@ public class CircuitBreakerTests
     {
         ResiliencePipelineFactory.Reset();
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.ServiceUnavailable);
+        handler.SetDefaultResponse(HttpStatusCode.ServiceUnavailable, null, NoRetryDelay);
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, FastTripOptions());
@@ -87,7 +90,7 @@ public class CircuitBreakerTests
     {
         ResiliencePipelineFactory.Reset();
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.ServiceUnavailable);
+        handler.SetDefaultResponse(HttpStatusCode.ServiceUnavailable, null, NoRetryDelay);
 
         var options = FastTripOptions();
         using var httpClient = new HttpClient(handler);
@@ -124,7 +127,7 @@ public class CircuitBreakerTests
         // SHORT sampling window: failures within the window should trip the breaker
         ResiliencePipelineFactory.Reset();
         var handler1 = new MockHttpHandler();
-        handler1.SetDefaultResponse(HttpStatusCode.ServiceUnavailable);
+        handler1.SetDefaultResponse(HttpStatusCode.ServiceUnavailable, null, NoRetryDelay);
 
         var shortWindowOptions = FastTripOptions(samplingDurationSeconds: 30);
         using var httpClient1 = new HttpClient(handler1);
@@ -144,7 +147,7 @@ public class CircuitBreakerTests
         // because MinThroughput is set very high relative to our few requests
         ResiliencePipelineFactory.Reset();
         var handler2 = new MockHttpHandler();
-        handler2.SetDefaultResponse(HttpStatusCode.ServiceUnavailable);
+        handler2.SetDefaultResponse(HttpStatusCode.ServiceUnavailable, null, NoRetryDelay);
 
         var highThresholdOptions = new ResilientGraphClientOptions
         {
@@ -152,7 +155,7 @@ public class CircuitBreakerTests
             MaxRetryAttempts = 1,
             CircuitBreakerMinThroughput = 1000,  // Need 1000 requests before evaluating
             CircuitBreakerFailureRatio = 0.5,
-            CircuitBreakerDurationSeconds = 5,
+            CircuitBreakerDurationSeconds = 1,
             CircuitBreakerSamplingDurationSeconds = 300,
             TotalTimeoutSeconds = 30,
             AttemptTimeoutSeconds = 10
@@ -280,7 +283,7 @@ public class CircuitBreakerTests
         // should succeed again. Tests CB under real concurrent contention.
         ResiliencePipelineFactory.Reset();
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.ServiceUnavailable);
+        handler.SetDefaultResponse(HttpStatusCode.ServiceUnavailable, null, NoRetryDelay);
 
         var options = FastTripOptions();
         using var httpClient = new HttpClient(handler);
@@ -331,14 +334,14 @@ public class CircuitBreakerTests
         // Same pipeline throughout (no Reset between phases).
         ResiliencePipelineFactory.Reset();
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.ServiceUnavailable);
+        handler.SetDefaultResponse(HttpStatusCode.ServiceUnavailable, null, NoRetryDelay);
 
         var options = new ResilientGraphClientOptions
         {
             NoRateLimit = true,
             MaxRetryAttempts = 1,
             CircuitBreakerFailureRatio = 0.1,
-            CircuitBreakerDurationSeconds = 5,
+            CircuitBreakerDurationSeconds = 1,
             CircuitBreakerSamplingDurationSeconds = 30,
             TotalTimeoutSeconds = 30,
             AttemptTimeoutSeconds = 10
@@ -391,7 +394,7 @@ public class CircuitBreakerTests
             TotalTimeoutSeconds = 60,
             CircuitBreakerMinThroughput = 2,             // trip after 2 outcomes
             CircuitBreakerFailureRatio = 0.5,
-            CircuitBreakerDurationSeconds = 5,
+            CircuitBreakerDurationSeconds = 1,
             CircuitBreakerSamplingDurationSeconds = 30
         };
 
@@ -458,7 +461,7 @@ public class CircuitBreakerTests
             TotalTimeoutSeconds = 30,
             CircuitBreakerMinThroughput = 4, // Trip after 4 failed outcomes
             CircuitBreakerFailureRatio = 0.5,
-            CircuitBreakerDurationSeconds = 10,
+            CircuitBreakerDurationSeconds = 1,
             CircuitBreakerSamplingDurationSeconds = 30
         };
 
@@ -549,7 +552,7 @@ public class CircuitBreakerTests
             TotalTimeoutSeconds = 60,                    // Plenty of room
             CircuitBreakerMinThroughput = 2,             // Trip after 2 outcomes
             CircuitBreakerFailureRatio = 0.5,
-            CircuitBreakerDurationSeconds = 5,
+            CircuitBreakerDurationSeconds = 1,
             CircuitBreakerSamplingDurationSeconds = 30
         };
 

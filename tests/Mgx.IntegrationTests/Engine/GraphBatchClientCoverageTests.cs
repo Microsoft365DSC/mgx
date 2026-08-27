@@ -23,7 +23,8 @@ public class GraphBatchClientCoverageTests
         MaxRetryAttempts = 3,
         CircuitBreakerMinThroughput = 1000,
         AttemptTimeoutSeconds = 10,
-        TotalTimeoutSeconds = 60
+        TotalTimeoutSeconds = 60,
+        MaxRetryAfterSeconds = 1
     };
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;

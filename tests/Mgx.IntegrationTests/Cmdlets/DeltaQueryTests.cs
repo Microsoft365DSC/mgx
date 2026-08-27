@@ -895,7 +895,8 @@ public class DeltaQueryTests
             CircuitBreakerMinThroughput = 2,
             CircuitBreakerFailureRatio = 0.5,
             CircuitBreakerDurationSeconds = 30,
-            MaxRetryAttempts = 1
+            MaxRetryAttempts = 1,
+            MaxRetryAfterSeconds = 1
         });
         ResiliencePipelineFactory.Reset();
 

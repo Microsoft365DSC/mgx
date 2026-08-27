@@ -13,7 +13,6 @@ durations can sit very differently against that budget.
 lowers it. Arms that do not load Mgx (the bare-SDK comparisons) record `Telemetry: null`, since
 there is no session telemetry to read - expected, not a failure.
 
-
 ## Prerequisites
 
 - PowerShell 7.5+, `Microsoft.Graph.Authentication`, `Microsoft.Graph.Users`
@@ -28,7 +27,7 @@ Never point these scripts at a production tenant. Benchmarks 04 and 07 create an
 ## The benchmarks
 
 | # | Script | Claim it proves | Tenant? |
-|---|--------|-----------------|---------|
+| --- | -------- | ----------------- | --------- |
 | 01 | `01-list-users.ps1` | Streaming enumeration beats SDK/raw REST; time-to-first-item | yes |
 | 02 | `02-fanout-lookup.ps1` | Bounded fan-out beats sequential SDK and DIY `ForEach -Parallel` | yes |
 | 03 | `03-user-report.ps1` | Composite real workload (users + groups + apps) | yes |

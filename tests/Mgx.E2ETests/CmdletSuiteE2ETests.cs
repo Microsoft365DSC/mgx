@@ -183,4 +183,57 @@ public class CmdletSuiteE2ETests(WireMockGraphFixture fixture) : IDisposable
         var state = Assert.Single(result.Output);
         Assert.Equal(false, state.Properties["IsEnabled"].Value);
     }
+
+    [Fact]
+    public async Task Content_reaches_the_pipeline_as_one_byte_array()
+    {
+        RequiresDocker();
+        await fixture.ResetAsync();
+        await fixture.StubAsync(GraphStubs.Content("/v1.0/me/drive/items/i1/content", 200, "0123456789"));
+
+        using var host = NewHost();
+        var result = host.Run(ps => ps.AddCommand("Get-MgxContent")
+            .AddParameter("Uri", "/me/drive/items/i1/content"));
+
+        Assert.Null(result.Terminating);
+        var bytes = Assert.IsType<byte[]>(Assert.Single(result.Output).BaseObject);
+        Assert.Equal("0123456789"u8.ToArray(), bytes);
+    }
+
+    [Fact]
+    public async Task A_byte_range_is_sent_on_the_wire_and_only_those_bytes_come_back()
+    {
+        RequiresDocker();
+        await fixture.ResetAsync();
+        await fixture.StubAsync(GraphStubs.Content("/v1.0/me/drive/items/i1/content", 206, "234",
+            range: "bytes=2-4", contentRange: "bytes 2-4/10"));
+
+        using var host = NewHost();
+        var result = host.Run(ps => ps.AddCommand("Get-MgxContent")
+            .AddParameter("Uri", "/me/drive/items/i1/content")
+            .AddParameter("Offset", 2)
+            .AddParameter("Length", 3));
+
+        Assert.Null(result.Terminating);
+        var bytes = Assert.IsType<byte[]>(Assert.Single(result.Output).BaseObject);
+        Assert.Equal("234"u8.ToArray(), bytes);
+    }
+
+    [Fact]
+    public async Task Content_written_with_OutFile_never_reaches_the_pipeline()
+    {
+        RequiresDocker();
+        await fixture.ResetAsync();
+        await fixture.StubAsync(GraphStubs.Content("/v1.0/me/drive/items/i1/content", 200, "0123456789"));
+        var path = InWorkDir("content.bin");
+
+        using var host = NewHost();
+        var result = host.Run(ps => ps.AddCommand("Get-MgxContent")
+            .AddParameter("Uri", "/me/drive/items/i1/content")
+            .AddParameter("OutFile", path));
+
+        Assert.Null(result.Terminating);
+        Assert.Empty(result.Output);
+        Assert.Equal("0123456789", await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
+    }
 }

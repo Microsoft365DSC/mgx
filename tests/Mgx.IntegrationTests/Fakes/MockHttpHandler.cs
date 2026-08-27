@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 
@@ -19,6 +20,7 @@ public class MockHttpHandler : HttpMessageHandler
 {
     private readonly Queue<MockResponse> _responses = new();
     private readonly List<HttpRequestMessage> _requests = [];
+    private readonly List<long> _requestTicks = [];
     private readonly object _lock = new();
     private MockResponse? _defaultResponse;
 
@@ -30,6 +32,19 @@ public class MockHttpHandler : HttpMessageHandler
     public List<HttpRequestMessage> Requests
     {
         get { lock (_lock) { return [.. _requests]; } }
+    }
+
+    /// <summary>Milliseconds between each arrival and the one before it, first entry excluded.</summary>
+    public List<double> ArrivalGapsMs
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return [.. _requestTicks.Zip(_requestTicks.Skip(1),
+                    (a, b) => (b - a) * 1000.0 / Stopwatch.Frequency)];
+            }
+        }
     }
 
     public void QueueResponse(HttpStatusCode statusCode, string? body = null, Dictionary<string, string>? headers = null)
@@ -67,6 +82,7 @@ public class MockHttpHandler : HttpMessageHandler
         lock (_lock)
         {
             _requests.Add(request);
+            _requestTicks.Add(Stopwatch.GetTimestamp());
             mock = _responses.Count > 0 ? _responses.Dequeue() : (_defaultResponse ?? new MockResponse(HttpStatusCode.OK, null, null, null));
         }
 

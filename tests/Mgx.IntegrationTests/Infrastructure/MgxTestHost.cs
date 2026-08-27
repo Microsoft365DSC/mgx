@@ -6,6 +6,7 @@ using Mgx.Cmdlets.Base;
 using Mgx.Cmdlets.Cmdlets;
 using Mgx.Cmdlets.Cmdlets.Batch;
 using Mgx.Cmdlets.Cmdlets.Configuration;
+using Mgx.Cmdlets.Cmdlets.Content;
 using Mgx.Cmdlets.Cmdlets.Delta;
 using Mgx.Cmdlets.Cmdlets.Expand;
 using Mgx.Cmdlets.Cmdlets.Export;
@@ -32,7 +33,8 @@ public sealed class MgxTestHost : IDisposable
         typeof(InvokeMgxRequest), typeof(InvokeMgxBatchRequest), typeof(SyncMgxDelta),
         typeof(ExportMgxCollection), typeof(ExpandMgxRelation),
         typeof(SetMgxOption), typeof(GetMgxOption), typeof(GetMgxTelemetry),
-        typeof(GetMgxResilience), typeof(EnableMgxResilience), typeof(DisableMgxResilience)
+        typeof(GetMgxResilience), typeof(EnableMgxResilience), typeof(DisableMgxResilience),
+        typeof(GetMgxContent)
     ];
 
     public static ResilientGraphClientOptions FastOptions => new()
@@ -50,7 +52,7 @@ public sealed class MgxTestHost : IDisposable
     private readonly HttpClient _httpClient;
 
     public MgxTestHost(StubHttpMessageHandler handler, string graphEndpoint = "https://graph.microsoft.com",
-        ResilientGraphClientOptions? options = null)
+        ResilientGraphClientOptions? options = null, bool useTestTransport = true)
     {
         var iss = InitialSessionState.CreateDefault2();
         foreach (var type in CmdletTypes)
@@ -70,7 +72,8 @@ public sealed class MgxTestHost : IDisposable
         GraphBatchClient.ResetPacingState();
         MgxCmdletBase.SetClientOptions(options ?? FastOptions);
         MgxCmdletBase.s_graphEndpoint = graphEndpoint;
-        MgxCmdletBase.s_testTransportFactory = () => _httpClient;
+        // Cleared for the tests that drive the real client build through a stubbed Graph SDK
+        MgxCmdletBase.s_testTransportFactory = useTestTransport ? () => _httpClient : null;
     }
 
     public MgxResult Run(Action<PowerShell> build)
@@ -85,13 +88,10 @@ public sealed class MgxTestHost : IDisposable
         build(ps);
 
         ErrorRecord? terminating = null;
-        var output = new List<PSObject>();
+        var output = new PSDataCollection<PSObject>();
         try
         {
-            if (pipelineInput != null)
-                output.AddRange(ps.Invoke(pipelineInput));
-            else
-                output.AddRange(ps.Invoke());
+            ps.Invoke(pipelineInput, output);
         }
         catch (RuntimeException ex)
         {
@@ -99,7 +99,7 @@ public sealed class MgxTestHost : IDisposable
         }
 
         return new MgxResult(
-            output,
+            [.. output],
             [.. ps.Streams.Error],
             [.. ps.Streams.Warning.Select(w => w.Message)],
             [.. ps.Streams.Verbose.Select(v => v.Message)],

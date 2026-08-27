@@ -30,7 +30,8 @@ public class GraphBatchClientTests
             MaxRetryAttempts = 1,
             CircuitBreakerMinThroughput = 1000,
             AttemptTimeoutSeconds = 10,
-            TotalTimeoutSeconds = 60
+            TotalTimeoutSeconds = 60,
+            MaxRetryAfterSeconds = 1
         };
         var client = new ResilientGraphClient(http, options);
         return (new GraphBatchClient(client, BaseUrl, maxRetryAfterSeconds: 1,

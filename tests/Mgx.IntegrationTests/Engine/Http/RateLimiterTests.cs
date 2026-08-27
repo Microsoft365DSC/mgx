@@ -40,15 +40,19 @@ public class RateLimiterTests
         handler.SetDefaultResponse(HttpStatusCode.OK, TestData.SingleUser);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient);
+        // The queue drains at RateLimitPerSecond, so the capacities are scaled down together
+        // to keep the wall clock near a second
+        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions
+        {
+            RateLimitBurst = 20,
+            RateLimitQueueLimit = 50,
+            RateLimitPerSecond = 50
+        });
 
-        // Fire way more concurrent requests than the token bucket allows
-        // Token bucket: 200 burst + 500 queue limit = max 700
-        // Fire 800 to try to exceed it
         var exceptions = new ConcurrentBag<Exception>();
         var successes = new ConcurrentBag<HttpResponseMessage>();
 
-        var tasks = Enumerable.Range(0, 800)
+        var tasks = Enumerable.Range(0, 80)
             .Select(async i =>
             {
                 try
@@ -65,14 +69,12 @@ public class RateLimiterTests
 
         await Task.WhenAll(tasks);
 
-        // Some should succeed, some must be rejected by the rate limiter
         Assert.True(successes.Count > 0, "At least some requests should succeed");
-        // With 200 burst + 500 queue = 700, firing 800 must produce rejections
         Assert.True(exceptions.Count > 0,
             $"Expected rejections but got 0. Successes: {successes.Count}. " +
-            $"Burst(200) + Queue(500) = 700 capacity, fired 800 requests.");
-        Assert.True(successes.Count + exceptions.Count == 800,
-            $"Total should be 800: {successes.Count} succeeded, {exceptions.Count} failed");
+            $"Burst(20) + Queue(50) = 70 capacity, fired 80 requests.");
+        Assert.True(successes.Count + exceptions.Count == 80,
+            $"Total should be 80: {successes.Count} succeeded, {exceptions.Count} failed");
         // Rejected requests should be rate-limiter exceptions
         Assert.Contains(exceptions, e => e.Message.Contains("Rate limit"));
     }
