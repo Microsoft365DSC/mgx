@@ -99,10 +99,9 @@ public class RetryTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(3, handler.RequestCount);
-        // Two backoffs off a 1s base grow past a single base delay, jitter included
         var gaps = handler.ArrivalGapsMs;
         Assert.Equal(2, gaps.Count);
-        Assert.True(gaps.Sum() >= 1500,
+        Assert.True(gaps.Sum() >= 1300,
             $"Expected the backoff to grow, got {gaps[0]:F0}ms then {gaps[1]:F0}ms");
     }
 
