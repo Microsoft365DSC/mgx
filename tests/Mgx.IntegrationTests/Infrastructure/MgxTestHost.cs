@@ -1,0 +1,120 @@
+using System.Collections;
+using System.Management.Automation;
+using System.Management.Automation.Runspaces;
+using System.Reflection;
+using Mgx.Cmdlets.Base;
+using Mgx.Cmdlets.Cmdlets;
+using Mgx.Cmdlets.Cmdlets.Batch;
+using Mgx.Cmdlets.Cmdlets.Configuration;
+using Mgx.Cmdlets.Cmdlets.Content;
+using Mgx.Cmdlets.Cmdlets.Delta;
+using Mgx.Cmdlets.Cmdlets.Expand;
+using Mgx.Cmdlets.Cmdlets.Export;
+using Mgx.Engine.Http;
+using Mgx.IntegrationTests.Fakes;
+
+namespace Mgx.IntegrationTests.Infrastructure;
+
+public sealed record MgxResult(
+    IReadOnlyList<PSObject> Output,
+    IReadOnlyList<ErrorRecord> Errors,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Verbose,
+    ErrorRecord? Terminating);
+
+/// <summary>
+/// Hosts the Mgx cmdlets in an in-process runspace with a stub HTTP transport.
+/// This allows testing cmdlet logic without network access.
+/// </summary>
+public sealed class MgxTestHost : IDisposable
+{
+    private static readonly Type[] CmdletTypes =
+    [
+        typeof(InvokeMgxRequest), typeof(InvokeMgxBatchRequest), typeof(SyncMgxDelta),
+        typeof(ExportMgxCollection), typeof(ExpandMgxRelation),
+        typeof(SetMgxOption), typeof(GetMgxOption), typeof(GetMgxTelemetry),
+        typeof(GetMgxResilience), typeof(EnableMgxResilience), typeof(DisableMgxResilience),
+        typeof(GetMgxContent)
+    ];
+
+    public static ResilientGraphClientOptions FastOptions => new()
+    {
+        NoRateLimit = true,
+        MaxRetryAttempts = 2,
+        AttemptTimeoutSeconds = 10,
+        TotalTimeoutSeconds = 30,
+        CircuitBreakerMinThroughput = 1000,
+        MaxRetryAfterSeconds = 1,
+        BatchItemsPerSecond = 0
+    };
+
+    private readonly Runspace _runspace;
+    private readonly HttpClient _httpClient;
+
+    public MgxTestHost(StubHttpMessageHandler handler, string graphEndpoint = "https://graph.microsoft.com",
+        ResilientGraphClientOptions? options = null, bool useTestTransport = true)
+    {
+        var iss = InitialSessionState.CreateDefault2();
+        foreach (var type in CmdletTypes)
+        {
+            var attribute = type.GetCustomAttribute<CmdletAttribute>()!;
+            iss.Commands.Add(new SessionStateCmdletEntry(
+                $"{attribute.VerbName}-{attribute.NounName}", type, helpFileName: null));
+        }
+
+        _runspace = RunspaceFactory.CreateRunspace(iss);
+        _runspace.Open();
+
+        _httpClient = new HttpClient(handler) { BaseAddress = new Uri(graphEndpoint) };
+
+        ResiliencePipelineFactory.Reset();
+        MgxTelemetryCollector.Current.Reset();
+        GraphBatchClient.ResetPacingState();
+        MgxCmdletBase.SetClientOptions(options ?? FastOptions);
+        MgxCmdletBase.s_graphEndpoint = graphEndpoint;
+        // Cleared for the tests that drive the real client build through a stubbed Graph SDK
+        MgxCmdletBase.s_testTransportFactory = useTestTransport ? () => _httpClient : null;
+    }
+
+    public MgxResult Run(Action<PowerShell> build)
+    {
+        return Run(build, null);
+    }
+
+    public MgxResult Run(Action<PowerShell> build, IEnumerable? pipelineInput)
+    {
+        using var ps = PowerShell.Create();
+        ps.Runspace = _runspace;
+        build(ps);
+
+        ErrorRecord? terminating = null;
+        var output = new PSDataCollection<PSObject>();
+        try
+        {
+            ps.Invoke(pipelineInput, output);
+        }
+        catch (RuntimeException ex)
+        {
+            terminating = ex.ErrorRecord;
+        }
+
+        return new MgxResult(
+            [.. output],
+            [.. ps.Streams.Error],
+            [.. ps.Streams.Warning.Select(w => w.Message)],
+            [.. ps.Streams.Verbose.Select(v => v.Message)],
+            terminating);
+    }
+
+    public void Dispose()
+    {
+        MgxCmdletBase.s_testTransportFactory = null;
+        MgxCmdletBase.s_graphEndpoint = "https://graph.microsoft.com";
+        MgxCmdletBase.SetClientOptions(ResilientGraphClientOptions.Default);
+        ResiliencePipelineFactory.Reset();
+        MgxTelemetryCollector.Current.Reset();
+        GraphBatchClient.ResetPacingState();
+        _httpClient?.Dispose();
+        _runspace.Dispose();
+    }
+}

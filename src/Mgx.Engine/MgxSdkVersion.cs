@@ -11,11 +11,6 @@ internal static class MgxSdkVersion
     /// <summary>Header value, e.g. "mgx/2.1.0".</summary>
     internal static readonly string Value = $"mgx/{Read()}";
 
-    /// <summary>
-    /// The assembly version, taken from <Version> in Directory.Build.props. The informational
-    /// version is the one that carries the full three-part number; SourceLink appends "+<commit>"
-    /// to it, which is stripped. AssemblyVersion is the fallback because it is always present.
-    /// </summary>
     private static string Read()
     {
         var assembly = typeof(MgxSdkVersion).Assembly;

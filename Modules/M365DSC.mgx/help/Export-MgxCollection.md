@@ -1,7 +1,7 @@
 ---
 external help file: Mgx.Cmdlets.dll-Help.xml
 Module Name: Mgx
-online version: https://github.com/gromedev/mgx/blob/main/module/help/Export-MgxCollection.md
+online version: https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Export-MgxCollection.md
 schema: 2.0.0
 ---
 
@@ -21,9 +21,11 @@ Export-MgxCollection [-Uri] <String> -OutputFile <String> [-Property <String[]>]
 ```
 
 ## DESCRIPTION
-Export-MgxCollection streams paginated Microsoft Graph API results directly to a JSONL (JSON Lines) file. One JSON object per line, no PSObject conversion, minimal memory pressure regardless of collection size.
+Export-MgxCollection streams paginated Microsoft Graph API results directly to a JSONL (JSON Lines) file. One JSON object per line, no object conversion, minimal memory pressure regardless of collection size.
 
-Supports checkpoint/resume: specify -CheckpointPath to save progress at page boundaries. On interruption and re-run, export resumes from the last checkpoint. The checkpoint file is deleted on successful completion.
+Supports checkpoint/resume: specify -CheckpointPath to save progress at page boundaries and mid-page (every 500 items). On interruption - Ctrl+C, a crash, or a killed process - re-running the same command resumes from the last checkpoint; an interrupted first run's partial temp file is recovered and trimmed to exactly the checkpointed item count, so the output never contains duplicates or torn lines. The checkpoint file is deleted on successful completion.
+
+Downstream note: Graph pagination can transiently serve an overlapping page (observed in the wild as one extra page of items versus @odata.count). Mgx warns when the returned count overshoots the reported count; if the JSONL feeds another system, deduplicate on the id field as a matter of hygiene.
 
 Returns a summary PSObject with ItemCount and OutputFile properties.
 
@@ -347,8 +349,8 @@ This cmdlet supports the common parameters: -Debug, -ErrorAction, -ErrorVariable
 
 ## OUTPUTS
 
-### System.Management.Automation.PSObject
-Summary object with ItemCount and OutputFile properties.
+### Mgx.Cmdlets.Models.MgxExportResult
+Summary object with ItemCount, OutputFile, Duration and ResumedFrom properties.
 
 ## NOTES
 Checkpoint uses positional skip, which assumes the Graph API returns the same page content on re-fetch. If items were added or deleted between interruption and resume, positional skip may produce duplicates or miss items.

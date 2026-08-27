@@ -19,10 +19,6 @@ public class GraphServiceException : Exception
         ErrorCode = code;
     }
 
-    /// <summary>
-    /// Parse the Graph error response body once, extracting both the formatted message and error code.
-    /// Appends guidance hint when available for known error codes.
-    /// </summary>
     private static string FormatAndExtract(HttpStatusCode statusCode, string responseBody, out string? errorCode)
     {
         errorCode = null;
@@ -32,10 +28,21 @@ public class GraphServiceException : Exception
         try
         {
             using var doc = JsonDocument.Parse(responseBody);
+
+            // Shape-check before every access. TryGetProperty and GetString throw on the wrong
+            // kind, and neither is a JsonException, so unexpected JSON would escape as an
+            // exception thrown from inside an exception constructor. Graph emits the OData
+            // envelope, but the content path second hop talks to hosts that are not Graph
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return $"HTTP {(int)statusCode}: {statusCode}";
+
             if (doc.RootElement.TryGetProperty("error", out var errorObj))
             {
-                var code = errorObj.TryGetProperty("code", out var c) ? c.GetString() : null;
-                var message = errorObj.TryGetProperty("message", out var m) ? m.GetString() : null;
+                if (errorObj.ValueKind != JsonValueKind.Object)
+                    return $"HTTP {(int)statusCode}: {statusCode}";
+
+                var code = AsString(errorObj, "code");
+                var message = AsString(errorObj, "message");
                 errorCode = code;
 
                 // Build formatted message from whatever Graph provided
@@ -51,8 +58,29 @@ public class GraphServiceException : Exception
                 return formatted;
             }
         }
-        catch (JsonException) { }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            // Backstop: the shape guards above cover the reachable cases, but an error body must
+            // never be able to throw out of here - callers are constructing an exception.
+        }
         return $"HTTP {(int)statusCode}: {statusCode}";
+    }
+
+    private static string? AsString(JsonElement obj, string name)
+    {
+        if (!obj.TryGetProperty(name, out var v)) return null;
+        if (v.ValueKind == JsonValueKind.String) return v.GetString();
+
+        // Some endpoints nest it as { "value": "..." } - the very shape this helper's own
+        // comment names. Returning null there produced "Code: " with an empty message, which
+        // is strictly worse than the text that was sitting one level down.
+        if (v.ValueKind == JsonValueKind.Object
+            && v.TryGetProperty("value", out var inner)
+            && inner.ValueKind == JsonValueKind.String)
+        {
+            return inner.GetString();
+        }
+        return null;
     }
 
     /// <summary>

@@ -22,7 +22,7 @@ public class AlcInitializer : IModuleAssemblyInitializer, IModuleAssemblyCleanup
         AssemblyLoadContext.Default.Resolving += ResolveDependency;
     }
 
-    private static Assembly? ResolveDependency(AssemblyLoadContext defaultAlc, AssemblyName name)
+    internal static Assembly? ResolveDependency(AssemblyLoadContext defaultAlc, AssemblyName name)
     {
         try
         {
@@ -54,7 +54,7 @@ public class AlcInitializer : IModuleAssemblyInitializer, IModuleAssemblyCleanup
         }
         catch (Exception ex)
         {
-            // Resolver must never throw; return null to let the runtime continue
+            // Resolver must never throw. Return null to let the runtime continue
             // its normal resolution process.
             System.Diagnostics.Debug.WriteLine($"[Mgx ALC] Failed to resolve '{name.Name}': {ex.Message}");
             return null;
@@ -63,38 +63,26 @@ public class AlcInitializer : IModuleAssemblyInitializer, IModuleAssemblyCleanup
 
     public void OnRemove(PSModuleInfo module)
     {
-        // Static-state cleanup MUST happen before the resolver is detached below.
-        //
-        // ResetHttpClient JIT-compiles code referencing ResilientGraphClient, whose fields
-        // include Polly types. Polly.Core ships in Dependencies/ and is reachable ONLY via
-        // ResolveDependency. It is also loaded lazily, so in a session where no Graph request
-        // ever ran it is absent from the AppDomain entirely.
-        //
-        // This cleanup used to live in the mgx.psm1 OnRemove scriptblock, which PowerShell
-        // invokes AFTER this callback. That ordering left the resolver already detached, so
-        // ResetHttpClient threw FileNotFoundException for Polly.Core, Remove-Module failed,
-        // and the module could never be unloaded. Owning the cleanup here makes the ordering
-        // a property of the code rather than of PowerShell's callback sequence.
-        //
-        // ResetHttpClient also calls ResiliencePipelineFactory.Reset internally, so both
-        // pieces of static state are released by this single call.
+        // Static-state cleanup must run before the resolver is detached below. ResetHttpClient
+        // JIT-compiles code referencing Polly types, and Polly.Core ships in Dependencies and is
+        // reachable only through ResolveDependency. It also loads lazily, so a session that ran
+        // no Graph request does not have it loaded at all.
+        // ResetHttpClient calls ResiliencePipelineFactory.Reset internally, so one call releases
+        // both pieces of static state
         try
         {
             Base.MgxCmdletBase.ResetHttpClient();
-
-            // Same rule: the AssemblyLoad hook is static state on MgxCmdletBase, so it is
-            // released here rather than after the detach below. Its own body touches nothing
-            // from Dependencies/, but keeping every cleanup on this side of the detach means
-            // the invariant holds no matter what either method grows into later.
-            Base.MgxCmdletBase.DetachAssemblyLoadHandler();
         }
         catch (Exception ex)
         {
-            // Never let teardown throw: a failure here would block module removal,
-            // which is the exact defect this ordering fixes.
+            // Never let teardown throw, or module removal is blocked
             System.Diagnostics.Debug.WriteLine($"[Mgx ALC] Cleanup on remove failed: {ex.Message}");
         }
 
         AssemblyLoadContext.Default.Resolving -= ResolveDependency;
+
+        // After the resolver, since this needs no dependency resolution and must not run before
+        // ResetHttpClient, which may trigger loads the type cache should still observe
+        Base.MgxCmdletBase.DetachAssemblyLoadHandler();
     }
 }

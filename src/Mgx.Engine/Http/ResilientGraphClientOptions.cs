@@ -32,7 +32,7 @@ public sealed class ResilientGraphClientOptions
     /// Maximum Retry-After delay in seconds. Caps server-requested delays to prevent
     /// a single throttled request from consuming the entire timeout budget. Applied in both
     /// the resilience pipeline DelayGenerator and batch client retry logic.
-    /// Graph API commonly returns Retry-After: 150s during sustained throttling; honoring
+    /// Graph API commonly returns Retry-After: 150s during sustained throttling. Honoring
     /// this (rather than clamping aggressively) reduces wasted retry attempts.
     /// Range: 1-600. Default: 120.
     /// </summary>
@@ -64,6 +64,13 @@ public sealed class ResilientGraphClientOptions
 
     /// <summary>Set to true to disable the rate limiter entirely. Default: false.</summary>
     public bool NoRateLimit { get; init; }
+
+    /// <summary>
+    /// Set to true to disable adaptive request pacing (AIMD back-off, slow start, and
+    /// throttle-proximity damping). Independent of NoRateLimit: the token bucket is the hard
+    /// backstop, the pacer is the proactive layer in front of it. Default: false (pacing ON).
+    /// </summary>
+    public bool NoAdaptivePacing { get; init; }
 
     /// <summary>Maximum queue depth before rejecting requests. Range: 0-100,000. Default: 500.</summary>
     public int RateLimitQueueLimit
@@ -141,7 +148,7 @@ public sealed class ResilientGraphClientOptions
     /// Number of batch chunks to execute concurrently. Range: 1-10. Default: 1 (sequential).
     /// At 1, batch chunks execute sequentially with cross-chunk backpressure delays (safest for throttled workloads).
     /// At 2+, chunks execute in parallel via SemaphoreSlim, improving throughput for non-throttled workloads.
-    /// Higher values consume throttle budget faster; use with caution on large tenants.
+    /// Higher values consume throttle budget faster. Use with caution on large tenants.
     /// </summary>
     public int BatchChunkConcurrency
     {
@@ -154,7 +161,10 @@ public sealed class ResilientGraphClientOptions
     /// <summary>
     /// Target throughput for batch item pacing in items/sec. Range: 0-1000. Default: 20.
     /// Controls inter-chunk delay in sequential batch execution to avoid burst-and-stall
-    /// against Graph's server-side write throttle (~20 items/sec for directory objects).
+    /// against Graph's server-side write throttle (~20 writes/sec sustained for directory
+    /// objects). Note: Graph throttles WRITES, not items - a compound item (e.g. a group
+    /// create with 20 members@odata.bind) costs ~21 writes, so divide the budget by the
+    /// item's write cost. See about_Mgx_Tuning "WRITE COST".
     /// Set to 0 to disable pacing. Does not affect the HTTP-level rate limiter.
     /// </summary>
     public int BatchItemsPerSecond

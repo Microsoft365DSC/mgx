@@ -27,7 +27,6 @@ public class EnableMgxResilience : PSCmdlet
     // Lock protecting all static state transitions. Used by both Enable and Disable.
     internal static readonly object StateLock = new();
 
-    // State for Disable-MgxResilience to restore
     internal static HttpClient? OriginalSdkClient { get; set; }
     internal static HttpClient? ResilientSdkClient { get; set; }
     internal static bool IsEnabled { get; set; }
@@ -67,7 +66,6 @@ public class EnableMgxResilience : PSCmdlet
             // Building Mgx's clean client first ensures it is cached before that happens.
             MgxCmdletBase.TryPreInitHttpClient(WriteWarning, WriteVerbose);
 
-            // Force SDK to initialize its HttpClient if not yet initialized
             if (currentClient == null)
             {
                 WriteVerbose("GraphHttpClient not initialized. Triggering initialization...");
@@ -83,7 +81,6 @@ public class EnableMgxResilience : PSCmdlet
                 return;
             }
 
-            // If already enabled, check if our client is still active
             if (IsEnabled)
             {
                 if (ReferenceEquals(currentClient, ResilientSdkClient))
@@ -94,7 +91,11 @@ public class EnableMgxResilience : PSCmdlet
                 // Our client was replaced (e.g., by Connect-MgGraph or Set-MgRequestContext).
                 // Dispose the old wrapped client to release its handler chain and sockets.
                 WriteVerbose("MgxResilience was reset by SDK. Re-injecting resilience...");
-                ResilientSdkClient?.Dispose();
+                // Not disposed: HttpClient.Dispose cancels its pending-request token source and
+                // the bridge handler forwards that token inward, so SDK requests already in
+                // flight die. Restoring GraphSession.GraphHttpClient stops new traffic. The old
+                // client is collected once the requests still using it finish.
+                _ = ResilientSdkClient;
                 ResilientSdkClient = null;
                 // Reset circuit breaker / rate limiter state from the previous tenant
                 ResiliencePipelineFactory.Reset();
@@ -104,13 +105,11 @@ public class EnableMgxResilience : PSCmdlet
                 "Replace with Polly resilience pipeline (retry, circuit breaker, rate limiting)"))
                 return;
 
-            // Save the current SDK client AFTER we know build will be attempted
             OriginalSdkClient = currentClient;
 
             var resilientClient = BuildResilientSdkClient(currentClient, WriteWarning);
             if (resilientClient == null)
             {
-                // Rollback: don't leave stale OriginalSdkClient on failure
                 OriginalSdkClient = null;
                 ThrowTerminatingError(new ErrorRecord(
                     new InvalidOperationException(
@@ -119,7 +118,6 @@ public class EnableMgxResilience : PSCmdlet
                 return;
             }
 
-            // Replace the SDK's HttpClient
             clientProp!.SetValue(instance, resilientClient);
             ResilientSdkClient = resilientClient;
             IsEnabled = true;
@@ -131,7 +129,6 @@ public class EnableMgxResilience : PSCmdlet
 
     private HttpClient? ForceInitializeAndGetClient(object instance, PropertyInfo? clientProp)
     {
-        // Use the Graph endpoint from the session (sovereign cloud support)
         var endpoint = MgxCmdletBase.GetGraphEndpoint(WriteWarning, WriteVerbose) ?? "https://graph.microsoft.com";
 
         // Save AzureADEndpoint before probe. Invoke-MgGraphRequest replaces
@@ -196,7 +193,8 @@ public class EnableMgxResilience : PSCmdlet
                 currentClient = null;
             }
 
-            ResilientSdkClient?.Dispose();
+            // Not disposed - see the note above. In-flight SDK requests would be cancelled.
+            _ = ResilientSdkClient;
             ResilientSdkClient = null;
             ActiveHandler = null;
             OriginalSdkClient = null;
@@ -227,34 +225,74 @@ public class EnableMgxResilience : PSCmdlet
         }
     }
 
+    /// <summary>
+    /// Turns off the SDK own retry handler for requests passing through the wrap.
+    ///
+    /// That handler sits inside the wrapped chain and answers 429 and 503 itself, so a throttle
+    /// never reaches the Mgx pipeline. The pacer learns nothing, telemetry books a throttled
+    /// session as zero retries, and the two retriers compound.
+    ///
+    /// Kiota reads this option per request. The type is resolved reflectively, so neither
+    /// assembly needs a reference to it and a rename leaves the wrap working as before.
+    ///
+    /// Throws rather than warns, because it runs on a request thread with no pipeline to write
+    /// a warning to. The handler catches it and carries on with the inner handler as it was.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, object?>? BuildInnerRetryOverride()
+    {
+        const string OptionType = "Microsoft.Kiota.Http.HttpClientLibrary.Middleware.Options.RetryHandlerOption";
+
+        var type = MgxCmdletBase.FindType(OptionType)
+            ?? throw new InvalidOperationException(
+                "the Graph SDK's retry option type was not found, so its own retry handler stays "
+                + "active inside the wrap and throttling will not reach Mgx's pacer or telemetry "
+                + "on this path");
+
+        var option = Activator.CreateInstance(type);
+        var maxRetry = type.GetProperty("MaxRetry");
+        if (option == null || maxRetry == null || !maxRetry.CanWrite)
+            throw new InvalidOperationException(
+                "the Graph SDK's retry option could not be configured, so its own retry handler "
+                + "stays active inside the wrap");
+
+        // MaxRetry is the only lever that removes a retry. ShouldRetry cannot suppress one,
+        // because the handler ORs it with its own status check.
+        // The cost is that the handler 503 and 504 retries go too, including on writes, which
+        // the Mgx pipeline will not take over since it refuses to retry a non-idempotent
+        // request on a
+        // 5xx because the write may already have been applied. 429 is unaffected - the pipeline
+        // retries that for every method - so throttled writes still complete.
+        maxRetry.SetValue(option, 0);
+
+        return new Dictionary<string, object?> { [OptionType] = option };
+    }
+
     private static HttpClient? BuildResilientSdkClient(HttpClient sdkClient, Action<string> warn)
     {
         try
         {
             var (pipeline, rateLimiter) = ResiliencePipelineFactory.GetOrCreate(MgxCmdletBase.s_clientOptions);
 
-            // Wrap the existing SDK client (preserving its full handler chain:
-            // ODataQueryOptionsHandler, NationalCloudHandler, RedirectHandler,
-            // AuthenticationHandler, etc.) with our resilience layer on top.
-            //
-            // Handler chain: ResilientDelegatingHandler -> SdkClientBridgeHandler -> sdkClient
-            //   The bridge handler delegates SendAsync to the original SDK HttpClient,
-            //   which processes through its complete handler pipeline internally.
-            //
-            // The SDK's built-in RetryHandler still runs inside, so
-            // a persistent 429 may retry internally (SDK: ~3 times) before our outer
-            // handler retries again. This is bounded by TotalTimeoutSeconds (300s)
-            // and circuit breaker. Both paths share the same pipeline, rate limiter,
-            // and circuit breaker to prevent cache thrashing and ensure consistent
-            // failure detection across SDK and direct Mgx cmdlets.
+            // Wrap the existing SDK client, preserving its full handler chain, with the
+            // resilience layer on top. The chain is ResilientDelegatingHandler, then
+            // SdkClientBridgeHandler, then the SDK client and its own handlers.
+            // AdditionalRequestOptionsFactory disarms the SDK retry handler per request. If that
+            // cannot be arranged it stays armed and the session behaves as before, without the
+            // measurement. Both paths share one pipeline, rate limiter and circuit breaker
             var resilientHandler = new ResilientDelegatingHandler(pipeline, rateLimiter)
             {
-                InnerHandler = new SdkClientBridgeHandler(sdkClient)
+                InnerHandler = new SdkClientBridgeHandler(sdkClient),
+                AdditionalRequestOptionsFactory = BuildInnerRetryOverride
             };
             ActiveHandler = resilientHandler;
 
+            // BaseAddress must come along: Invoke-MgGraphRequest resolves a relative -Uri
+            // against the active client's BaseAddress before any handler runs. Default
+            // request headers are NOT copied - the bridge delegates to sdkClient.SendAsync,
+            // which applies the original client's defaults to each request anyway.
             return new HttpClient(resilientHandler)
             {
+                BaseAddress = sdkClient.BaseAddress,
                 Timeout = sdkClient.Timeout
             };
         }
@@ -265,10 +303,6 @@ public class EnableMgxResilience : PSCmdlet
         }
     }
 
-    /// <summary>
-    /// Bridges from a DelegatingHandler chain to an existing HttpClient, preserving
-    /// the SDK's full handler pipeline (OData, NationalCloud, Redirect, Auth, etc.).
-    /// </summary>
     private sealed class SdkClientBridgeHandler : HttpMessageHandler
     {
         private readonly HttpClient _sdkClient;

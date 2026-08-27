@@ -23,6 +23,43 @@ CLIENT-SIDE RATE LIMITING (ON BY DEFAULT)
 
     Disable explicitly with Set-MgxOption -NoRateLimit.
 
+ADAPTIVE PACING (ON BY DEFAULT)
+
+    A proactive gate ahead of the token bucket. The bucket enforces a hard
+    request-rate ceiling; the pacer slows down BEFORE Graph throttles, based
+    on what the tenant is signaling. Independent of -NoRateLimit; disable
+    explicitly with Set-MgxOption -NoAdaptivePacing.
+
+    State is kept per workload (drive/SharePoint, directory, other), so a
+    throttle on one service never slows an unrelated workload in the same
+    session. Three mechanisms, all inactive (zero delay) in steady state:
+
+    - AIMD back-off. A 429 caps the workload's request rate (4 req/sec on
+      the first throttle, halving on repeat, floor 2). The cap climbs back
+      a tenth of the ceiling per clean second and expires outright after
+      five quiet minutes. A server Retry-After additionally holds ALL
+      requests for that workload, not just the throttled one.
+
+    - Slow start. A workload that is cold (first use, or idle five minutes)
+      opens with a 4 req/sec rate cap that doubles each clean second until
+      it reaches the ceiling. The first request is never delayed; the cap
+      only bites when demand exceeds it, i.e. fan-outs -- the pattern that
+      otherwise throttles before completing a single item.
+
+    - Throttle-proximity damping. When Graph reports
+      x-ms-throttle-limit-percentage (documented to appear above 80% of
+      budget), requests are spaced with a delay that ramps from 0ms at 0.8
+      to 2000ms at 1.2, while the report stays fresh (30s).
+
+    Batch outer /$batch POSTs are exempt from the gate -- batch throughput
+    is owned by BatchItemsPerSecond and its item-level pacing above -- but
+    their responses still feed the pacer's signals.
+
+    Watch it work: Get-MgxTelemetry shows total pacing wait, activation
+    count, the last reported throttle percentage, and a per-workload state
+    line (active caps, slow start, latency vs. baseline). Run any cmdlet
+    with -Verbose to see individual pacing waits.
+
 RETRY BUDGET CAPS
 
     Setting                Default     Hard Max    Purpose
@@ -63,6 +100,43 @@ BATCH CONSTRAINTS
     without a 429 add a tenth of the configured rate, and once no throttling has
     been seen for five minutes the configured rate is restored outright. Run
     Invoke-MgxBatchRequest with -Verbose to see each adjustment.
+
+WRITE COST: PACE BY WRITES, NOT ITEMS
+
+    BatchItemsPerSecond paces batch items, but Graph throttles directory
+    writes. Those are the same thing only when each item performs one write.
+    A compound item multiplies the true rate:
+
+        Item shape                                Writes per item
+        ----------                                ---------------
+        POST /users (plain create)                1
+        PATCH /users/{id}                         1
+        POST /groups with 20 members@odata.bind   ~21
+
+    At the default 20 items/sec, plain creates put ~20 writes/sec on the
+    tenant; group creates with 20 bound members put ~420 writes/sec on it.
+
+    The trap: heavy-write batches look fine at first. Graph's write throttle
+    is a sliding budget, not an instant rate check -- a burst allowance
+    absorbs the early chunks, then sustained throttle waves begin. Observed
+    on a live ~100k-object tenant: 57,000 plain user creates ran at
+    20 items/sec for 48 minutes with zero visible throttling, while group
+    creates with 20-member binds at the same item rate ran clean for several
+    thousand items and then drew 429 waves with multi-minute Retry-After
+    backoff.
+
+    Adaptive pacing recovers on its own (rates halve on 429, climb back on
+    clean chunks, restore fully after five clean minutes) and no items are
+    lost -- but recovery time is wall-clock time. For compound items, set
+    the rate for the write cost up front:
+
+        # Starting point: divide the default budget by writes-per-item
+        # e.g. ~21-write group creates:
+        Set-MgxOption -BatchItemsPerSecond 2
+
+    Then let adaptive pacing find the tenant's real ceiling from below,
+    instead of starting above it and paying for the discovery in Retry-After
+    waits. Run with -Verbose to watch the rate adjustments.
 
 POST SAFETY
     Non-idempotent methods (POST) only retry on 429 -- not on 5xx. A 500 on

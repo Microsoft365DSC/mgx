@@ -1,5 +1,57 @@
 # Changelog
 
+## 2.1.0
+
+Merges upstream `gromedev/mgx` 2.1.1. The module name, version line, target framework and CI remain this fork's.
+
+### Added
+
+- `Get-MgxContent`, which downloads file and media content whole or by byte range (`-First`, `-Offset`/`-Length`). The pre-authenticated download URL is fetched over a second, token-free hop against a host allowlist, so a redirect cannot send a bearer token to an unvalidated host.
+- Adaptive request pacing, on by default. Requests are spaced before they are sent, per workload, ahead of the token bucket. Opt out with `Set-MgxOption -NoAdaptivePacing`. The batch pacer's existing AIMD now shares the same rules.
+- `Sync-MgxDelta -CheckpointPath` to resume an interrupted enumeration, `-Latest` to baseline state without enumerating, and `-Prefer` for drive delta tokens.
+- Telemetry now reports `AdaptivePacingWaitMs`, `AdaptivePacingActivations`, `LastThrottlePercentage`, `PacingState` and `ContentBytesDownloaded`.
+- `Invoke-MgxBatchRequest` echoes a caller-supplied `Id`, so a batch is correlated on your own key rather than on URL or output position. Dead-letter records carry it too. Output is unchanged when no `Id` is supplied.
+- `Invoke-MgxBatchRequest -FollowNextLink` drains `@odata.nextLink` in sub-responses, merging the pages in through follow-up batches. A page that cannot be read marks that one sub-request `PagingIncomplete` and takes the failing page's `Status`, without discarding the others. `-MaxPage` bounds the drain.
+- `tests/benchmarks`, 19 standalone performance scripts. Not run in CI.
+- The build now regenerates the compiled help from `Modules/M365DSC.mgx/help` with platyPS and fails when it cannot, so the shipped MAML cannot drift from its source. `tests/Unit/Mgx.HelpFreshness.Tests.ps1` checks the same thing from the other side.
+
+### Fixed
+
+- `Invoke-MgxBatchRequest` emitted no per-item error for a failed batch item unless `-DeadLetterPath` was given and writing that file then threw, so `-ErrorAction Stop` did not trip and `$Error` stayed empty. The per-item errors now run on every batch. Note that these land in `$Error` even under `-ErrorAction SilentlyContinue`, so anything branching on `$Error[0]` may see a batch error it did not before.
+- `Get-MgxResilience` and `Export-MgxCollection` declared `[OutputType(typeof(PSObject))]` while emitting `MgxResilienceOutput` and `MgxExportResult`. Both now declare the type they return.
+- Enumeration returned part of a collection without an error when a `nextLink` was refused. A refused link now throws, so a truncated result can no longer be mistaken for a complete one.
+- `-Debug` wrote pre-authenticated download URLs verbatim, from both redirect headers and response bodies. Capability-carrying URLs and `Location` headers are now redacted.
+- Cmdlets reported "run Connect-MgGraph" even when `Microsoft.Graph.Authentication` was not installed at all. Absent and disconnected are now told apart. This closes a gap left when 2.0.3 removed the manifest dependency.
+- The rate limiter and HTTP client were disposed on a timer while live clients still held them, so a `Set-MgxOption` call broke long-running exports and `Enable-MgxResilience` sessions minutes later. They are now dropped rather than disposed.
+- `-Top` was ignored when combined with `-All`, returning the whole collection.
+- `Enable-MgxResilience` lost the wrapped client's `BaseAddress`, breaking `Invoke-MgGraphRequest` with a relative URI, and left the SDK's own retry handler armed inside the wrap, so throttling never reached our pipeline or telemetry.
+- `Expand-MgxRelation` handed two input objects sharing an id the same relation instance, so writing to one changed the other. `-Top` also sent a second `$top` when the caller's URI already carried one.
+- A non-Graph JSON error body threw from inside the constructor of the exception being built to report it.
+- `-WhatIf` did not gate read-only batches, and a failed `$batch` chunk discarded the results of chunks that had already run.
+- Export and delta resume dropped, duplicated or reordered items across a range of interruption cases, and a denied or read-only output file ended a sync with an unhandled error on Windows.
+
+### Changed
+
+- Removed the unsupported claim that `Invoke-MgxBatchRequest` races above 200 invocations per second. 500 instantiations well past that rate produce no failures.
+- `tests/` is now lowercase, matching upstream, so both test trees can coexist on a case-insensitive filesystem.
+- `examples/` is grouped into folders by purpose.
+- The module staging target runs on Release only, so a Debug `dotnet test` no longer overwrites a Release-staged module.
+
+### Testing and CI
+
+- The test harness runs both suites behind one entry point and reports them the same way CI does: `## C# Unit Test Results`, `## C# Code Coverage` and `## PowerShell Unit Test Results`. The run summary and a local `Invoke-TestHarness` now share the same trx and Cobertura parsing, so they cannot drift.
+- The merged suite was de-duplicated: 119 tests were removed as filler or as duplicates of the same production behavior already covered on the other side, and the `Live`-tagged Pester blocks were dropped because this fork does not ship `tests/Live`. The xUnit suite runs serialized, since the cmdlet-hosting tests inject into process-wide static state.
+- Fixed the atomic checkpoint and delta-state save failing under a transient Windows sharing violation, which upstream's own concurrency test caught.
+- Code coverage is now collected on every PR build and published to the GitHub Actions run summary, alongside a combined table of the xUnit, E2E and Pester results.
+- Added engine tests for `GraphBatchClient`, `PageIterator` and `ConcurrentFanOut`, which previously had no direct coverage: `$batch` chunking at 20 items, per-item 429 retry, the response-count guard, pagination and its SSRF rejection path, and bulk-write partial failure.
+- Added `tests/Mgx.E2ETests`, which runs the cmdlets in a real runspace against a WireMock container serving canned Graph responses over HTTPS. HTTPS is required rather than incidental because `NextLinkValidator` rejects any non-https `@odata.nextLink`. A plain-HTTP mock would end pagination after one page while still reporting success.
+- The CI workflow is now three jobs. Windows keeps the module build, unit tests and Pester surface tests. The E2E job runs on Linux because Windows runners cannot host Linux containers. A third job merges the coverage from both and writes the summary.
+- Internal: `MgxCmdletBase` gained an `internal static` transport override for tests that host the cmdlets without a Graph connection.
+- Updated `Testcontainers` to `4.14.0` to fix warning about old and vulnerable `SSH.NET` dependency package, while here update empty constructor `ContainerBuilder()`, which now is obsolete, to `ContainerBuilder(Image)`.
+- Updated `Wiremock` docker image to `3.13.2`
+- Changed method `ResolveDependency`, from class `AlcInitializer`, from `private` to `internal` for testability
+- Added several new tests to increase code coverage
+
 ## 2.0.4
 
 - Fixed `Remove-Module M365DSC.mgx` failing and leaving the module permanently loaded. Static-state cleanup now runs in `AlcInitializer.OnRemove`, ahead of the ALC resolver detaching; it previously ran from the module's `OnRemove` scriptblock, which PowerShell invokes *after* that callback, by which point `Polly.Core` was no longer resolvable and the cleanup threw. Only triggered in sessions where no Graph request had run, because `Polly.Core` loads lazily.
@@ -42,9 +94,9 @@
 
 ## 1.0.3
 
-_Upstream release, merged into this fork at 2.0.4. The `SdkVersion` fix listed here was already
+*Upstream release, merged into this fork at 2.0.4. The `SdkVersion` fix listed here was already
 solved differently in 2.0.2 (derived from the assembly version rather than a hand-maintained
-constant), so upstream's constant and its build gate were not carried over._
+constant), so upstream's constant and its build gate were not carried over.*
 
 - Fixed `Remove-Module Mgx` failing and leaving the module loaded. Static-state cleanup moved into `AlcInitializer.OnRemove`, ahead of the ALC resolver detaching; it previously ran from the module `OnRemove` scriptblock, by which point `Polly.Core` was unresolvable. Only triggered when no Graph request had run in the session
 - Fixed the `SdkVersion` request header reporting `mgx/0.3.0` regardless of the installed version. It now matches the module version, and `build.ps1` fails the build if the constant and the manifest ever disagree
@@ -53,8 +105,8 @@ constant), so upstream's constant and its build gate were not carried over._
 
 ## 1.0.2
 
-- Fixed Linux install: renamed `Mgx.psd1`, `Mgx.psm1`, and `Mgx.Format.ps1xml` to lowercase so `Install-Module Mgx` works on case-sensitive filesystems (PSGallery lowercases the module folder name)
-- Updated `about_Mgx_Tuning` version reference to v1.0.1
+- Fixed Linux install: lowercased the manifest, module and format filenames for case-sensitive filesystems.
+- Updated the about_Mgx_Tuning version reference to v1.0.1.
 
 ## 1.0.1
 

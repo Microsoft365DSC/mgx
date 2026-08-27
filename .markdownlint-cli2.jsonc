@@ -1,0 +1,21 @@
+{
+  // Hand-written docs only. Modules/M365DSC.mgx/help/*.md is platyPS source that build.ps1
+  // compiles into MAML, so its structure is the generator's to decide, not a linter's.
+  "globs": [
+    "**/*.md",
+    "!Modules/**",
+    "!docs/**",
+    "!**/node_modules/**"
+  ],
+  "config": {
+    // The changelog and README are written one long line per entry, so reflowing would make
+    // every future edit a whole-paragraph diff for no gain.
+    "MD013": false,
+
+    // The repo uses dashes for bullets throughout.
+    "MD004": { "style": "dash" },
+
+    // README footnote markers.
+    "MD033": { "allowed_elements": ["sup"] }
+  }
+}

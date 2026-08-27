@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using Mgx.Cmdlets.Base;
 using Mgx.Engine.Http;
 using Mgx.Engine.Models;
+using Mgx.Engine.Pagination;
 using Polly.CircuitBreaker;
 
 namespace Mgx.Cmdlets.Cmdlets.Batch;
@@ -25,26 +26,14 @@ namespace Mgx.Cmdlets.Cmdlets.Batch;
 [OutputType(typeof(Hashtable))]
 public class InvokeMgxBatchRequest : MgxCmdletBase
 {
-    /// <summary>
-    /// Graph API URLs to batch. Accepts absolute URLs (https://graph.microsoft.com/v1.0/users/id)
-    /// or relative URLs (/users/id). Also accepts Hashtables or PSObjects with Url/Method/Body members.
-    /// </summary>
     [Parameter(Mandatory = true, Position = 0, ValueFromPipeline = true)]
     [Alias("Url")]
     public object[] Uri { get; set; } = [];
 
-    /// <summary>
-    /// HTTP method for all requests (when piping string URLs). Default: GET.
-    /// Ignored when pipeline input carries its own Method member.
-    /// </summary>
     [Parameter]
     [ValidateSet("GET", "POST", "PATCH", "PUT", "DELETE")]
     public string Method { get; set; } = "GET";
 
-    /// <summary>
-    /// Request body for all requests (when piping string URLs).
-    /// Ignored when pipeline input carries its own Body member.
-    /// </summary>
     [Parameter]
     public object? Body { get; set; }
 
@@ -57,10 +46,6 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
     [ArgumentCompleter(typeof(ConsistencyLevelCompleter))]
     public string? ConsistencyLevel { get; set; }
 
-    /// <summary>
-    /// Custom headers applied to each individual batch item.
-    /// Merged with ConsistencyLevel (if specified). Keys are header names, values are header values.
-    /// </summary>
     [Parameter]
     public System.Collections.Hashtable? Headers { get; set; }
 
@@ -73,22 +58,27 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
     [ArgumentCompleter(typeof(ThrottlePriorityCompleter))]
     public string? ThrottlePriority { get; set; }
 
-    /// <summary>
-    /// Graph API version. Default: v1.0. Use "beta" for preview endpoints.
-    /// </summary>
+    /// <summary>Graph API version. Default: v1.0. Use "beta" for preview endpoints.</summary>
     [Parameter]
     [ValidateSet("v1.0", "beta")]
     [ArgumentCompleter(typeof(ApiVersionCompleter))]
     public string ApiVersion { get; set; } = "v1.0";
 
-    /// <summary>
-    /// Path to a JSONL file where failed batch items (status >= 400) are appended.
-    /// Each line contains Url, Method, Body (original request), Status, and Error.
-    /// The file can be re-piped to Invoke-MgxBatchRequest for retry:
-    ///   Get-Content dead.jsonl | ConvertFrom-Json | Invoke-MgxBatchRequest
-    /// </summary>
     [Parameter]
     public string? DeadLetterPath { get; set; }
+
+    /// <summary>
+    /// Drain @odata.nextLink in sub-response bodies, merging the pages into each result. Off by
+    /// default. Follow-up pages are submitted as further batches, so N partial collections drain
+    /// in ceil(N/20) requests per page rather than N.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter FollowNextLink { get; set; }
+
+    /// <summary>Ceiling on pages drained per sub-request. 0, the default, is unlimited.</summary>
+    [Parameter]
+    [ValidateRange(0, int.MaxValue)]
+    public int MaxPage { get; set; }
 
     private string VersionedBaseUrl => $"{s_graphEndpoint}/{ApiVersion}";
 
@@ -115,12 +105,10 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                 return;
             }
 
-            // Resolve dead-letter path early (before network calls)
             string? resolvedDeadLetterPath = DeadLetterPath != null
                 ? GetUnresolvedProviderPathFromPSPath(DeadLetterPath)
                 : null;
 
-            // Validate: $search in any URL requires ConsistencyLevel
             var hasSearch = _collected.Any(c =>
                 c.Url.Contains("$search", StringComparison.OrdinalIgnoreCase));
             if (hasSearch && string.IsNullOrEmpty(ConsistencyLevel))
@@ -133,29 +121,33 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                 return;
             }
 
-            // ShouldProcess gate: only for batches containing write operations
+            // -WhatIf is documented as "the cmdlet is not run", without qualification, so the
+            // gate covers reads as well. A read-only batch changes nothing on the server, but it
+            // spends resource units, can be throttled, and emits objects into the pipeline -
+            // none of which is "not run", and none of which the caller asked for.
             var writeOps = _collected.Where(c =>
                 !string.Equals(c.Method, "GET", StringComparison.OrdinalIgnoreCase)).ToList();
 
-            if (writeOps.Count > 0)
+            string target;
+            if (writeOps.Count == 0)
             {
-                string target;
-                if (writeOps.All(o => string.Equals(o.Method, writeOps[0].Method, StringComparison.OrdinalIgnoreCase)))
-                {
-                    target = $"{writeOps[0].Method} {_collected.Count} requests via $batch";
-                }
-                else
-                {
-                    var breakdown = writeOps
-                        .GroupBy(o => o.Method.ToUpperInvariant())
-                        .OrderByDescending(g => g.Count())
-                        .Select(g => $"{g.Count()} {g.Key}");
-                    target = $"{_collected.Count} requests ({string.Join(", ", breakdown)}) via $batch";
-                }
-
-                if (!ShouldProcess(target, "Send batch"))
-                    return;
+                target = $"GET {_collected.Count} requests via $batch";
             }
+            else if (writeOps.All(o => string.Equals(o.Method, writeOps[0].Method, StringComparison.OrdinalIgnoreCase)))
+            {
+                target = $"{writeOps[0].Method} {_collected.Count} requests via $batch";
+            }
+            else
+            {
+                var breakdown = writeOps
+                    .GroupBy(o => o.Method.ToUpperInvariant())
+                    .OrderByDescending(g => g.Count())
+                    .Select(g => $"{g.Count()} {g.Key}");
+                target = $"{_collected.Count} requests ({string.Join(", ", breakdown)}) via $batch";
+            }
+
+            if (!ShouldProcess(target, "Send batch"))
+                return;
 
             var client = GetClient();
             var mergedHeaders = Headers != null ? new System.Collections.Hashtable(Headers) : null;
@@ -173,7 +165,9 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                 ItemHeaders = itemHeaders
             };
 
-            // Convert to BatchOperation list.
+            // Convert to BatchOperation list. An item whose body is not valid JSON fails on
+            // its own (non-terminating error) instead of aborting the whole batch. `submitted`
+            // keeps result indices aligned with the operations actually sent.
             var operations = new List<BatchOperation>(_collected.Count);
             var submitted = new List<BatchInput>(_collected.Count);
             foreach (var input in _collected)
@@ -196,7 +190,7 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                     }
                 }
 
-                operations.Add(new BatchOperation(NormalizeToRelativeUrl(input.Url), input.Method, body));
+                operations.Add(new BatchOperation(NormalizeToRelativeUrl(input.Url), input.Method, body, input.Id));
                 submitted.Add(input);
             }
 
@@ -209,7 +203,10 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
             var results = batchResult.Results;
             var telemetry = batchResult.Telemetry;
 
-            // Output all results as Hashtables (success and failure)
+            var drains = FollowNextLink.IsPresent
+                ? DrainNextLinks(batchClient, results)
+                : [];
+
             for (int i = 0; i < results.Count; i++)
             {
                 var (_, item) = results[i];
@@ -225,28 +222,33 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                         : null
                 };
 
+                if (drains.TryGetValue(i, out var drain))
+                    ApplyDrain(result, drain, input);
+
+                // Only when the caller supplied one, so output is unchanged for callers that did not
+                if (input.Id != null)
+                    result["Id"] = input.Id;
+
+                // Status 0 means the operation was never sent, because a chunk before it failed.
+                // It is not a success and must not read as one - the caller has to be able to
+                // tell a write that may have landed from one that certainly did not.
+                if (item.Status == GraphBatchClient.NotSentStatus)
+                    result["NotSent"] = true;
+
                 // Single-argument WriteObject does not enumerate, so the Hashtable is emitted whole
                 WriteObject(result);
             }
 
-            // Emit errors for failed items (enables -ErrorAction Stop, populates $Error)
-            for (int i = 0; i < results.Count; i++)
+            // A chunk's POST failed after earlier chunks were applied. Their results are above;
+            // this says why the rest never went, and NotSent names them.
+            if (batchResult.ChunkFailure != null)
             {
-                var (_, item) = results[i];
-                if (item.Status >= 400)
-                {
-                    var input = submitted[i];
-                    var graphMessage = TryExtractBatchErrorMessage(item);
-                    var errorMessage = graphMessage != null
-                        ? $"{input.Method} {input.Url}: {graphMessage}"
-                        : $"HTTP {item.Status} for {input.Method} {input.Url}";
-                    var ex = new InvalidOperationException(errorMessage);
-                    WriteError(new ErrorRecord(ex, "BatchItemError",
-                        MapStatusToCategory((HttpStatusCode)item.Status), input.Url));
-                }
+                var notSent = batchResult.NotSent.Count;
+                WriteError(new ErrorRecord(batchResult.ChunkFailure, "BatchChunkFailed",
+                    ErrorCategory.NotSpecified,
+                    $"{notSent} of {results.Count} operations were not sent"));
             }
 
-            // Write failed items to dead-letter file (append mode)
             if (resolvedDeadLetterPath != null)
             {
                 var failedCount = 0;
@@ -256,7 +258,7 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                     for (int i = 0; i < results.Count; i++)
                     {
                         var (_, item) = results[i];
-                        if (item.Status < 400) continue;
+                        if (item.Status < 400 && item.Status != GraphBatchClient.NotSentStatus) continue;
 
                         var input = submitted[i];
                         var deadLetter = new JsonObject
@@ -266,6 +268,10 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                             ["Method"] = input.Method,
                             ["Status"] = item.Status,
                         };
+
+                        // Carried so a dead-letter replay round-trips the caller correlation key
+                        if (input.Id != null)
+                            deadLetter["Id"] = input.Id;
 
                         if (input.Body != null)
                         {
@@ -292,7 +298,31 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                     WriteVerbose($"Wrote {failedCount} failed items to dead-letter file: {resolvedDeadLetterPath}");
             }
 
-            // Structured telemetry summary
+            // Per-item errors, so -ErrorAction Stop trips and $Error is populated
+            for (int i = 0; i < results.Count; i++)
+            {
+                var (_, item) = results[i];
+                if (item.Status == GraphBatchClient.NotSentStatus)
+                {
+                    var skipped = submitted[i];
+                    WriteError(new ErrorRecord(
+                        new InvalidOperationException(
+                            $"{skipped.Method} {skipped.Url} was not sent: an earlier chunk failed."),
+                        "BatchItemNotSent", ErrorCategory.NotSpecified, skipped.Url));
+                }
+                else if (item.Status >= 400)
+                {
+                    var input = submitted[i];
+                    var graphMessage = TryExtractBatchErrorMessage(item);
+                    var errorMessage = graphMessage != null
+                        ? $"{input.Method} {input.Url}: {graphMessage}"
+                        : $"HTTP {item.Status} for {input.Method} {input.Url}";
+                    var itemError = new InvalidOperationException(errorMessage);
+                    WriteError(new ErrorRecord(itemError, "BatchItemError",
+                        MapStatusToCategory((HttpStatusCode)item.Status), input.Url));
+                }
+            }
+
             WriteBatchTelemetry(telemetry);
         }
         catch (Exception ex) when (ex is GraphServiceException or BrokenCircuitException or HttpRequestException)
@@ -320,7 +350,8 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
     /// <summary>
     /// Parse pipeline input into a BatchInput. Supports:
     /// - String: use as URL with shared -Method/-Body parameters
-    /// - Hashtable or PSObject with a Url member: use per-item Url/Method/Body
+    /// - Hashtable or PSObject with a Url member: use per-item Url/Method/Body, and an optional Id
+    ///   echoed back on the matching result
     /// </summary>
     internal BatchInput? ParsePipelineInput(object item)
     {
@@ -344,7 +375,10 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
                     return null;
                 }
                 var body = TryGetMember(value, "Body");
-                return new BatchInput(urlValue, method, body);
+                // The caller id is theirs to choose and is echoed back on the result. The wire id
+                // GraphBatchClient assigns is regenerated per retry attempt and stays internal
+                var id = TryGetMember(value, "Id")?.ToString();
+                return new BatchInput(urlValue, method, body, id);
             }
         }
 
@@ -352,9 +386,6 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
         return null;
     }
 
-    /// <summary>
-    /// Converts an absolute Graph URL to a relative path for /$batch.
-    /// </summary>
     private string NormalizeToRelativeUrl(string url)
     {
         if (url.StartsWith('/'))
@@ -447,11 +478,14 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
 
     private void WriteBatchTelemetry(BatchTelemetry telemetry)
     {
-        // Propagate per-item 429 counts to session telemetry
         if (telemetry.ThrottleEncounters > 0)
             MgxTelemetryCollector.Current.RecordBatchItemThrottles(telemetry.ThrottleEncounters);
 
-        // Always emit verbose summary with timing breakdown
+        // Propagate item-retry delay time so Get-MgxTelemetry's RetryDelayMs reflects
+        // batch retry waits
+        if (telemetry.TotalRetryDelayMs > 0)
+            MgxTelemetryCollector.Current.RecordBatchRetryDelay(telemetry.TotalRetryDelayMs);
+
         var elapsedSec = telemetry.TotalElapsedMs / 1000.0;
         var throughput = telemetry.TotalElapsedMs > 0 ? telemetry.TotalRequests / elapsedSec : 0;
         var summary = $"Batch: {telemetry.Succeeded} succeeded, {telemetry.Failed} failed out of {telemetry.TotalRequests} requests in {elapsedSec:F1}s ({throughput:F1}/sec).";
@@ -465,7 +499,6 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
             summary += $" Time in retry delays: {telemetry.TotalRetryDelayMs / 1000.0:F1}s.";
         WriteVerbose(summary);
 
-        // Warn if any items failed after all retry attempts
         if (telemetry.Failed > 0)
         {
             WriteWarning(
@@ -474,5 +507,145 @@ public class InvokeMgxBatchRequest : MgxCmdletBase
         }
     }
 
-    internal sealed record BatchInput(string Url, string Method, object? Body);
+    internal sealed record BatchInput(string Url, string Method, object? Body, string? Id = null);
+
+    /// <summary>
+    /// What draining produced for one sub-request: the extra items collected, and the failure that
+    /// stopped it if it did not drain fully.
+    /// </summary>
+    private sealed class PageDrain
+    {
+        public List<JsonElement> Extra { get; } = [];
+        public int? FailedStatus { get; set; }
+        public string? FailedReason { get; set; }
+        public string? FailedErrorId { get; set; }
+        public bool Incomplete => FailedStatus.HasValue;
+    }
+
+    private static string? ReadNextLink(JsonElement? body)
+    {
+        if (body is not { ValueKind: JsonValueKind.Object } obj) return null;
+        return obj.TryGetProperty("@odata.nextLink", out var link) && link.ValueKind == JsonValueKind.String
+            ? link.GetString()
+            : null;
+    }
+
+    private static IEnumerable<JsonElement> ReadValueItems(JsonElement? body)
+    {
+        if (body is not { ValueKind: JsonValueKind.Object } obj) yield break;
+        if (!obj.TryGetProperty("value", out var value) || value.ValueKind != JsonValueKind.Array) yield break;
+        foreach (var item in value.EnumerateArray()) yield return item.Clone();
+    }
+
+    /// <summary>
+    /// Follow @odata.nextLink for every sub-response that carries one, submitting each round as a
+    /// further batch so the round-trip advantage of batching is kept.
+    /// </summary>
+    private Dictionary<int, PageDrain> DrainNextLinks(
+        GraphBatchClient batchClient,
+        IReadOnlyList<(BatchOperation Operation, GraphBatchResponseItem Response)> results)
+    {
+        var drains = new Dictionary<int, PageDrain>();
+        var pending = new Dictionary<int, string>();
+        var expectedHost = new Uri(s_graphEndpoint);
+
+        for (var i = 0; i < results.Count; i++)
+        {
+            var link = ReadNextLink(results[i].Response.Body);
+            if (link != null) pending[i] = link;
+        }
+
+        var page = 0;
+        while (pending.Count > 0 && (MaxPage == 0 || page < MaxPage))
+        {
+            page++;
+            var indices = new List<int>(pending.Count);
+            var ops = new List<BatchOperation>(pending.Count);
+
+            foreach (var (index, link) in pending)
+            {
+                var drain = drains.TryGetValue(index, out var d) ? d : drains[index] = new PageDrain();
+
+                // The link comes out of a response body, so it is validated like every other
+                // nextLink in the module before anything follows it
+                if (NextLinkValidator.Validate(link, expectedHost) == null)
+                {
+                    drain.FailedStatus = results[index].Response.Status;
+                    drain.FailedReason = $"the service returned an @odata.nextLink that failed validation ({link})";
+                    drain.FailedErrorId = "BatchNextLinkRefused";
+                    continue;
+                }
+
+                indices.Add(index);
+                ops.Add(new BatchOperation(NormalizeToRelativeUrl(link), "GET"));
+            }
+
+            pending.Clear();
+            if (ops.Count == 0) break;
+
+            var followUp = batchClient.ExecuteBatchIndexedAsync(ops, CancellationToken).GetAwaiter().GetResult();
+            for (var j = 0; j < followUp.Results.Count; j++)
+            {
+                var index = indices[j];
+                var drain = drains[index];
+                var response = followUp.Results[j].Response;
+
+                if (response.Status >= 400 || response.Status == GraphBatchClient.NotSentStatus)
+                {
+                    drain.FailedStatus = response.Status;
+                    drain.FailedReason = "a page of the collection could not be read";
+                    drain.FailedErrorId = "BatchPagingFailed";
+                    continue;
+                }
+
+                drain.Extra.AddRange(ReadValueItems(response.Body));
+
+                var next = ReadNextLink(response.Body);
+                if (next != null) pending[index] = next;
+            }
+        }
+
+        // Whatever is still pending ran into the ceiling rather than the end of the collection
+        foreach (var (index, _) in pending)
+        {
+            var drain = drains.TryGetValue(index, out var d) ? d : drains[index] = new PageDrain();
+            drain.FailedStatus = results[index].Response.Status;
+            drain.FailedReason = $"stopped after -MaxPage {MaxPage} pages with more to read";
+            drain.FailedErrorId = "BatchPagingTruncated";
+        }
+
+        return drains;
+    }
+
+    /// <summary>
+    /// Fold a drain into the result: merge the extra pages into Body.value, and if the drain stopped
+    /// early mark the result failed rather than letting a short collection read as a complete one.
+    /// </summary>
+    private void ApplyDrain(Hashtable result, PageDrain drain, BatchInput input)
+    {
+        if (result["Body"] is Hashtable body)
+        {
+            if (drain.Extra.Count > 0)
+            {
+                var merged = new List<object?>();
+                if (body["value"] is IEnumerable existing and not string)
+                    foreach (var item in existing) merged.Add(item);
+                foreach (var item in drain.Extra) merged.Add(JsonToHashtable(item));
+                body["value"] = merged.ToArray();
+            }
+
+        }
+
+        if (!drain.Incomplete) return;
+
+        // The failing page's status, not the first page's 200. A partially drained collection is a
+        // failed read, and PagingIncomplete separates "nothing arrived" from "some of it did"
+        result["Status"] = drain.FailedStatus!.Value;
+        result["PagingIncomplete"] = true;
+
+        var message = $"{input.Method} {input.Url}: {drain.FailedReason}. "
+            + $"{drain.Extra.Count} additional item(s) were read before it stopped.";
+        WriteError(new ErrorRecord(new InvalidOperationException(message),
+            drain.FailedErrorId!, ErrorCategory.LimitsExceeded, input.Url));
+    }
 }
