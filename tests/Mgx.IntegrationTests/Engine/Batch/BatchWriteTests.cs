@@ -10,6 +10,13 @@ namespace Mgx.IntegrationTests;
 [Collection("Pipeline")]
 public class BatchWriteTests
 {
+    /// <summary>Caps every batch retry backoff at one second, the option minimum.</summary>
+    private static ResilientGraphClientOptions FastRetryOptions => new()
+    {
+        NoRateLimit = true,
+        MaxRetryAfterSeconds = 1
+    };
+
     private static readonly string BatchSuccessResponse = """
     {
         "responses": [
@@ -35,8 +42,8 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BatchSuccessResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
         var operations = new List<BatchOperation>
@@ -69,8 +76,8 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BatchGetResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client)
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1)
         {
             ItemHeaders = new Dictionary<string, string>
             {
@@ -116,8 +123,8 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, singlePostResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client)
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1)
         {
             ItemHeaders = new Dictionary<string, string>
             {
@@ -159,9 +166,9 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, singleGetResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
         // No ItemHeaders set (default null)
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = new List<BatchOperation> { new("/users") };
 
@@ -182,8 +189,8 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BatchGetResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         // Old-style call with string URLs
         var urls = new List<string> { "/users/user1", "/users/user2" };
@@ -219,8 +226,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, post503Response);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
         var operations = new List<BatchOperation> { new("/users", "POST", body) };
@@ -258,8 +265,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, getSuccessResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = new List<BatchOperation> { new("/users/user1", "GET") };
 
@@ -296,8 +303,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, getSuccessResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = new List<BatchOperation> { new("/users/user1", "GET") };
         var result = await batchClient.ExecuteBatchIndexedAsync(operations);
@@ -331,8 +338,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, getSuccessResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = new List<BatchOperation> { new("/users/user1", "GET") };
         var result = await batchClient.ExecuteBatchIndexedAsync(operations);
@@ -358,8 +365,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, post500Response);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
         var operations = new List<BatchOperation> { new("/users", "POST", body) };
@@ -386,8 +393,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, post502Response);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
         var operations = new List<BatchOperation> { new("/users", "POST", body) };
@@ -413,8 +420,8 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, patchResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"department":"Engineering"}""");
         var operations = new List<BatchOperation> { new("/users/user1", "PATCH", body) };
@@ -445,8 +452,8 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, deleteResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = new List<BatchOperation>
         {
@@ -494,8 +501,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, successResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
         var operations = new List<BatchOperation> { new("/users", "POST", body) };
@@ -529,8 +536,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, chunk2Response);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         // 25 operations: should produce 2 batch calls (20 + 5)
         var operations = Enumerable.Range(1, 25)
@@ -565,8 +572,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, mixedResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test Group"}""");
         var operations = new List<BatchOperation>
@@ -599,9 +606,9 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BatchGetResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
         // Construct with beta base URL (mirrors what InvokeMgxBatchRequest.VersionedBaseUrl produces)
-        var batchClient = new GraphBatchClient(client, "https://graph.microsoft.com/beta");
+        var batchClient = new GraphBatchClient(client, "https://graph.microsoft.com/beta", maxRetryAfterSeconds: 1);
 
         var urls = new List<string> { "/users/user1", "/users/user2" };
         await batchClient.ExecuteBatchAsync(urls);
@@ -629,8 +636,8 @@ public class BatchWriteTests
             handler.QueueResponse(HttpStatusCode.OK, get503Response);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = new List<BatchOperation> { new("/users/user1", "GET") };
         var result = await batchClient.ExecuteBatchIndexedAsync(operations);
@@ -661,8 +668,8 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, truncatedResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = new List<BatchOperation>
         {
@@ -697,8 +704,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, chunk2Success);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = Enumerable.Range(1, 25)
             .Select(i => new BatchOperation($"/users/user{i}", "GET"))
@@ -731,8 +738,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, chunk2Success);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = Enumerable.Range(1, 25)
             .Select(i => new BatchOperation($"/users/user{i}", "GET"))
@@ -781,8 +788,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, getSuccessResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = new List<BatchOperation> { new("/users/user1", "GET") };
         var result = await batchClient.ExecuteBatchIndexedAsync(operations);
@@ -824,8 +831,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, successResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
         var operations = new List<BatchOperation> { new("/users", "POST", body) };
@@ -845,8 +852,7 @@ public class BatchWriteTests
     [Fact]
     public async Task BatchGet_VerboseWriter_LogsClampEvent()
     {
-        // Server requests 300s Retry-After, client clamps to 120s (default).
-        // VerboseWriter should receive a clamping message.
+        // The clamp is what the test pays in wall clock and sits at the option minimum
         var throttledResponse = """
         {
             "responses": [
@@ -867,8 +873,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, successResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var verboseMessages = new List<string>();
         batchClient.VerboseWriter = msg => verboseMessages.Add(msg);
@@ -877,8 +883,7 @@ public class BatchWriteTests
         await batchClient.ExecuteBatchIndexedAsync(operations);
         batchClient.DrainVerboseMessages();
 
-        // Verify a clamping message was logged
-        Assert.Contains(verboseMessages, m => m.Contains("300s") && m.Contains("clamped"));
+        Assert.Contains(verboseMessages, m => m.Contains("300s") && m.Contains("clamped to 1s"));
     }
 
     private static string BuildBatchResponse(int count, int status, int? retryAfterSeconds = null)
@@ -905,10 +910,10 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BuildBatchResponse(20, 201));
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
-        var batchClient = new GraphBatchClient(client, batchItemsPerSecond: 20);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1, batchItemsPerSecond: 20);
         var ops = Enumerable.Range(1, 40)
             .Select(i => new BatchOperation($"/users", "POST", body))
             .ToArray();
@@ -933,9 +938,9 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BuildBatchResponse(20, 200));
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
 
-        var batchClient = new GraphBatchClient(client, batchItemsPerSecond: 0);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1, batchItemsPerSecond: 0);
         var ops = Enumerable.Range(1, 40)
             .Select(i => new BatchOperation($"/users/{i}"))
             .ToArray();
@@ -966,9 +971,9 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BuildBatchResponse(20, 200));
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
 
-        var batchClient = new GraphBatchClient(client, batchItemsPerSecond: 20);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1, batchItemsPerSecond: 20);
         var ops = Enumerable.Range(1, 40)
             .Select(i => new BatchOperation($"/users/{i}"))
             .ToArray();
@@ -991,7 +996,7 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BuildBatchResponse(20, 201));
 
         using var httpClient = new HttpClient(handler);
-        using var rgcClient = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+        using var rgcClient = new ResilientGraphClient(httpClient, FastRetryOptions);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
         var ops = Enumerable.Range(1, 20)
@@ -999,12 +1004,12 @@ public class BatchWriteTests
             .ToArray();
 
         // Call 1: establishes pacing baseline
-        var client1 = new GraphBatchClient(rgcClient, batchItemsPerSecond: 20);
+        var client1 = new GraphBatchClient(rgcClient, maxRetryAfterSeconds: 1, batchItemsPerSecond: 20);
         await client1.ExecuteBatchIndexedAsync(ops);
 
         // Call 2: should be delayed by cross-call pacing
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var client2 = new GraphBatchClient(rgcClient, batchItemsPerSecond: 20);
+        var client2 = new GraphBatchClient(rgcClient, maxRetryAfterSeconds: 1, batchItemsPerSecond: 20);
         var result = await client2.ExecuteBatchIndexedAsync(ops);
         sw.Stop();
 
@@ -1024,18 +1029,18 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BuildBatchResponse(20, 201));
 
         using var httpClient = new HttpClient(handler);
-        using var rgcClient = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+        using var rgcClient = new ResilientGraphClient(httpClient, FastRetryOptions);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
         var ops = Enumerable.Range(1, 20)
             .Select(i => new BatchOperation($"/users", "POST", body))
             .ToArray();
 
-        var client1 = new GraphBatchClient(rgcClient, batchItemsPerSecond: 0);
+        var client1 = new GraphBatchClient(rgcClient, maxRetryAfterSeconds: 1, batchItemsPerSecond: 0);
         await client1.ExecuteBatchIndexedAsync(ops);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var client2 = new GraphBatchClient(rgcClient, batchItemsPerSecond: 0);
+        var client2 = new GraphBatchClient(rgcClient, maxRetryAfterSeconds: 1, batchItemsPerSecond: 0);
         var result = await client2.ExecuteBatchIndexedAsync(ops);
         sw.Stop();
 
@@ -1054,7 +1059,7 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BuildBatchResponse(20, 200));
 
         using var httpClient = new HttpClient(handler);
-        using var rgcClient = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+        using var rgcClient = new ResilientGraphClient(httpClient, FastRetryOptions);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
 
@@ -1062,7 +1067,7 @@ public class BatchWriteTests
         var writeOps = Enumerable.Range(1, 20)
             .Select(i => new BatchOperation($"/users", "POST", body))
             .ToArray();
-        var client1 = new GraphBatchClient(rgcClient, batchItemsPerSecond: 20);
+        var client1 = new GraphBatchClient(rgcClient, maxRetryAfterSeconds: 1, batchItemsPerSecond: 20);
         await client1.ExecuteBatchIndexedAsync(writeOps);
 
         // Call 2: GET-only batch — should NOT be paced
@@ -1070,7 +1075,7 @@ public class BatchWriteTests
             .Select(i => new BatchOperation($"/users/{i}"))
             .ToArray();
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var client2 = new GraphBatchClient(rgcClient, batchItemsPerSecond: 20);
+        var client2 = new GraphBatchClient(rgcClient, maxRetryAfterSeconds: 1, batchItemsPerSecond: 20);
         var result = await client2.ExecuteBatchIndexedAsync(getOps);
         sw.Stop();
 
@@ -1090,7 +1095,7 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BuildBatchResponse(20, 200));
 
         using var httpClient = new HttpClient(handler);
-        using var rgcClient = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+        using var rgcClient = new ResilientGraphClient(httpClient, FastRetryOptions);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
 
@@ -1098,7 +1103,7 @@ public class BatchWriteTests
         var largeOps = Enumerable.Range(1, 40)
             .Select(i => new BatchOperation($"/users", "POST", body))
             .ToArray();
-        var client1 = new GraphBatchClient(rgcClient, batchItemsPerSecond: 20);
+        var client1 = new GraphBatchClient(rgcClient, maxRetryAfterSeconds: 1, batchItemsPerSecond: 20);
         await client1.ExecuteBatchIndexedAsync(largeOps);
 
         // Call 2: 20-item write batch — cross-call delay should be ~1000ms (capped), not ~2000ms
@@ -1106,7 +1111,7 @@ public class BatchWriteTests
             .Select(i => new BatchOperation($"/users", "POST", body))
             .ToArray();
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var client2 = new GraphBatchClient(rgcClient, batchItemsPerSecond: 20);
+        var client2 = new GraphBatchClient(rgcClient, maxRetryAfterSeconds: 1, batchItemsPerSecond: 20);
         await client2.ExecuteBatchIndexedAsync(smallOps);
         sw.Stop();
 
@@ -1142,7 +1147,7 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BuildBatchResponse(20, 201));
 
         using var httpClient = new HttpClient(handler);
-        using var rgcClient = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+        using var rgcClient = new ResilientGraphClient(httpClient, FastRetryOptions);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
         var ops = Enumerable.Range(1, 20)
@@ -1150,7 +1155,7 @@ public class BatchWriteTests
             .ToArray();
 
         // Seed the pacing state so all concurrent readers have something to read
-        var seed = new GraphBatchClient(rgcClient, batchItemsPerSecond: 20);
+        var seed = new GraphBatchClient(rgcClient, maxRetryAfterSeconds: 1, batchItemsPerSecond: 20);
         await seed.ExecuteBatchIndexedAsync(ops);
 
         // 20 concurrent calls — each should be paced because the static state has
@@ -1159,7 +1164,7 @@ public class BatchWriteTests
         var tasks = Enumerable.Range(0, 20).Select(async _ =>
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var client = new GraphBatchClient(rgcClient, batchItemsPerSecond: 20);
+            var client = new GraphBatchClient(rgcClient, maxRetryAfterSeconds: 1, batchItemsPerSecond: 20);
             await client.ExecuteBatchIndexedAsync(ops);
             sw.Stop();
 
@@ -1195,8 +1200,8 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BuildBatchResponse(20, 429, retryAfterSeconds: 0));
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = Enumerable.Range(1, 20)
             .Select(i => new BatchOperation($"/users/{i}"))
@@ -1222,8 +1227,8 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BuildBatchResponse(20, 500));
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
         var ops = Enumerable.Range(1, 20)
@@ -1252,8 +1257,8 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, allSuccessResponse); // Retries: all succeed
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = Enumerable.Range(1, 20)
             .Select(i => new BatchOperation($"/users/{i}"))
@@ -1289,8 +1294,8 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, mismatchedResponse);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = new[]
         {
@@ -1321,9 +1326,10 @@ public class BatchWriteTests
             NoRateLimit = true,
             MaxRetryAttempts = 1,
             AttemptTimeoutSeconds = 5,
-            TotalTimeoutSeconds = 30
+            TotalTimeoutSeconds = 30,
+            MaxRetryAfterSeconds = 1
         });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = new[]
         {
@@ -1352,7 +1358,7 @@ public class BatchWriteTests
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient); // Default options — rate limiter ON
 
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
         var ops = Enumerable.Range(1, 40)
             .Select(i => new BatchOperation($"/users/{i}"))
             .ToArray();
@@ -1377,8 +1383,8 @@ public class BatchWriteTests
         handler.SetDefaultResponse(HttpStatusCode.OK, BuildBatchResponse(2, 429, retryAfterSeconds: 30));
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = new[]
         {
@@ -1605,8 +1611,8 @@ public class BatchWriteTests
         """);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
         var operations = new List<BatchOperation>
@@ -1629,8 +1635,8 @@ public class BatchWriteTests
     {
         var handler = new MockHttpHandler();
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var result = await batchClient.ExecuteBatchIndexedAsync(Array.Empty<BatchOperation>());
 
@@ -1646,8 +1652,8 @@ public class BatchWriteTests
         handler.QueueResponse(HttpStatusCode.OK, """{ "responses": [] }""");
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        using var client = new ResilientGraphClient(httpClient, FastRetryOptions);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => batchClient.ExecuteBatchIndexedAsync(new[] { new BatchOperation("/users/1") }));

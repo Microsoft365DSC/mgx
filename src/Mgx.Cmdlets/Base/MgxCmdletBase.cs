@@ -601,8 +601,17 @@ public abstract class MgxCmdletBase : MgxCmdletCore
     internal static void DetachAssemblyLoadHandler() =>
         AppDomain.CurrentDomain.AssemblyLoad -= OnAssemblyLoad;
 
+    /// <summary>
+    /// Stands in for the Graph SDK types the bridge reflects against. Its answers are never cached.
+    /// </summary>
+    internal static volatile Func<string, Type?>? s_typeResolverForTests;
+
     internal static Type? FindType(string fullName)
     {
+        var resolver = s_typeResolverForTests;
+        if (resolver != null)
+            return resolver(fullName);
+
         if (s_typeCache.TryGetValue(fullName, out var cached))
             return cached;
 

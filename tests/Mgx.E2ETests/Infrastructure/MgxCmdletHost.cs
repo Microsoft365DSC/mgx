@@ -5,6 +5,7 @@ using Mgx.Cmdlets.Base;
 using Mgx.Cmdlets.Cmdlets;
 using Mgx.Cmdlets.Cmdlets.Batch;
 using Mgx.Cmdlets.Cmdlets.Configuration;
+using Mgx.Cmdlets.Cmdlets.Content;
 using Mgx.Cmdlets.Cmdlets.Delta;
 using Mgx.Cmdlets.Cmdlets.Expand;
 using Mgx.Cmdlets.Cmdlets.Export;
@@ -32,7 +33,8 @@ public sealed class MgxCmdletHost : IDisposable
         typeof(InvokeMgxRequest), typeof(InvokeMgxBatchRequest), typeof(SyncMgxDelta),
         typeof(ExportMgxCollection), typeof(ExpandMgxRelation),
         typeof(SetMgxOption), typeof(GetMgxOption), typeof(GetMgxTelemetry),
-        typeof(GetMgxResilience), typeof(EnableMgxResilience), typeof(DisableMgxResilience)
+        typeof(GetMgxResilience), typeof(EnableMgxResilience), typeof(DisableMgxResilience),
+        typeof(GetMgxContent)
     ];
 
     /// <summary>Tuned so a test never waits on a rate limiter, a backoff, or a circuit breaker.</summary>
@@ -80,10 +82,10 @@ public sealed class MgxCmdletHost : IDisposable
         build(ps);
 
         ErrorRecord? terminating = null;
-        var output = new List<PSObject>();
+        var output = new PSDataCollection<PSObject>();
         try
         {
-            output.AddRange(ps.Invoke());
+            ps.Invoke(input: null, output);
         }
         catch (RuntimeException ex)
         {
@@ -91,7 +93,7 @@ public sealed class MgxCmdletHost : IDisposable
         }
 
         return new MgxResult(
-            output,
+            [.. output],
             [.. ps.Streams.Error],
             [.. ps.Streams.Warning.Select(w => w.Message)],
             [.. ps.Streams.Verbose.Select(v => v.Message)],

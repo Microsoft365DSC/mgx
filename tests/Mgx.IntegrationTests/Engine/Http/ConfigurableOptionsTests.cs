@@ -218,40 +218,32 @@ public class ConfigurableOptionsTests
     {
         ResiliencePipelineFactory.Reset();
 
-        // Create pipeline with rate limiter (short timeout so test doesn't take forever)
         var options1 = new ResilientGraphClientOptions
         {
             NoRateLimit = false,
-            TotalTimeoutSeconds = 2  // Delayed dispose will wait 2 seconds
+            TotalTimeoutSeconds = 1
         };
         var (_, rateLimiter1) = ResiliencePipelineFactory.GetOrCreate(options1);
         Assert.NotNull(rateLimiter1);
 
-        // Change options: old rate limiter should be scheduled for disposal
         var options2 = new ResilientGraphClientOptions
         {
             NoRateLimit = false,
-            TotalTimeoutSeconds = 2,
+            TotalTimeoutSeconds = 1,
             RateLimitBurst = 200
         };
         var (_, rateLimiter2) = ResiliencePipelineFactory.GetOrCreate(options2);
         Assert.NotNull(rateLimiter2);
         Assert.NotSame(rateLimiter1, rateLimiter2);
 
-        // Immediately after: old limiter should still be alive (delayed dispose)
-        // AttemptAcquire returns a lease (not disposed yet)
         var lease = rateLimiter1!.AttemptAcquire();
         lease.Dispose();  // Clean up lease
 
-        // Wait for delayed dispose to fire (TotalTimeoutSeconds + buffer)
-        await Task.Delay(TimeSpan.FromSeconds(3.5));
+        // Past the TotalTimeoutSeconds window a timer-based dispose would have used
+        await Task.Delay(TimeSpan.FromSeconds(1.5));
 
-        // The old limiter must STILL work. This test previously asserted the opposite, and in
-        // doing so pinned a defect: every ResilientGraphClient built from a limiter captures it
-        // as a readonly field, and the handler Enable-MgxResilience injects into the SDK is not
-        // rebuilt when options change. Disposing on a timer meant any Set-MgxOption call left
-        // SDK cmdlets throwing ObjectDisposedException minutes later. Retirement is now dropping
-        // the reference, so holders keep working and the instance is collected when they let go.
+        // Every ResilientGraphClient captures its limiter as a readonly field, and disposing a
+        // retired limiter on a timer left SDK cmdlets throwing ObjectDisposedException later
         using (var stillWorks = rateLimiter1.AttemptAcquire())
         {
             Assert.NotNull(stillWorks);
@@ -268,23 +260,20 @@ public class ConfigurableOptionsTests
         var options = new ResilientGraphClientOptions
         {
             NoRateLimit = false,
-            TotalTimeoutSeconds = 2
+            TotalTimeoutSeconds = 1
         };
         var (_, rateLimiter) = ResiliencePipelineFactory.GetOrCreate(options);
         Assert.NotNull(rateLimiter);
 
-        // Reset should schedule delayed disposal
         ResiliencePipelineFactory.Reset();
 
-        // Immediately: still alive
         var lease = rateLimiter!.AttemptAcquire();
         lease.Dispose();
 
-        // Wait for dispose
-        await Task.Delay(TimeSpan.FromSeconds(3.5));
+        // Past the TotalTimeoutSeconds window a timer-based dispose would have used
+        await Task.Delay(TimeSpan.FromSeconds(1.5));
 
-        // Still usable after Reset, for the same reason as the GetOrCreate case above: in-flight
-        // clients hold this instance and disposing it would break them mid-request.
+        // In-flight clients hold this instance and disposing it would break them mid-request
         using (var stillWorks = rateLimiter.AttemptAcquire())
         {
             Assert.NotNull(stillWorks);

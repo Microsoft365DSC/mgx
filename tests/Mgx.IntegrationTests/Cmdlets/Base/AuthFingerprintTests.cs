@@ -13,11 +13,19 @@ public class AuthFingerprintTests
     [Fact]
     public void Reports_the_graph_sdk_as_absent_when_it_is_not_loaded()
     {
-        // Microsoft.Graph.Authentication is a soft dependency, so its absence is a state the
-        // module has to detect rather than assume away: it selects GraphAuthModuleNotLoaded
-        // over "run Connect-MgGraph", which would name a cmdlet the session does not have.
-        // This xUnit process loads no Graph assemblies, so absence is the honest answer here.
-        Assert.False(MgxCmdletBase.IsGraphAuthLoaded());
+        // Microsoft.Graph.Authentication is a soft dependency whose absence selects
+        // GraphAuthModuleNotLoaded over "run Connect-MgGraph", which would name a cmdlet the
+        // session does not have. Asserted on the type rather than on IsGraphAuthLoaded, whose
+        // Get-MgContext fallback finds an installed-but-unloaded module on a developer machine
+        Assert.Null(MgxCmdletBase.FindType("Microsoft.Graph.PowerShell.Authentication.GraphSession"));
+    }
+
+    [Fact]
+    public void Reports_the_graph_sdk_as_present_once_its_session_type_resolves()
+    {
+        using var stub = new Fakes.GraphSdkStub();
+
+        Assert.True(MgxCmdletBase.IsGraphAuthLoaded());
     }
 
 

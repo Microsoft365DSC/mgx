@@ -4,8 +4,8 @@ using Mgx.E2ETests.Infrastructure;
 
 /// <summary>
 /// Full cmdlet-to-HTTP round trips against a WireMock container. Paging tests assert the
-/// container's request count as well as the items, because an SSRF-rejected nextLink ends
-/// pagination silently and item counts alone would pass while covering only the first page.
+/// container's request count as well as the items, because a dropped nextLink leaves a short run
+/// indistinguishable from a full one that only ever had a first page.
 /// </summary>
 [Trait("Category", "E2E")]
 public class InvokeMgxRequestE2ETests(WireMockGraphFixture fixture)
@@ -59,7 +59,7 @@ public class InvokeMgxRequestE2ETests(WireMockGraphFixture fixture)
     }
 
     [Fact]
-    public async Task A_nextLink_on_another_host_stops_pagination()
+    public async Task A_nextLink_on_another_host_fails_the_enumeration()
     {
         RequiresDocker();
         await fixture.ResetAsync();
@@ -73,6 +73,9 @@ public class InvokeMgxRequestE2ETests(WireMockGraphFixture fixture)
 
         Assert.Equal(2, result.Output.Count);
         Assert.Equal(1, await fixture.RequestCountAsync());
+        Assert.NotNull(result.Terminating);
+        Assert.Contains("nextLink", result.Terminating!.Exception.Message,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

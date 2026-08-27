@@ -61,6 +61,30 @@ public static class GraphStubs
         """;
     }
 
+    /// <summary>A binary content response, optionally matched on the Range header.</summary>
+    public static string Content(string path, int status, string body, string? range = null,
+        string? contentRange = null)
+    {
+        var match = range is null
+            ? ""
+            : $$""" , "headers": { "Range": { "equalTo": "{{range}}" } } """;
+        var contentRangeHeader = contentRange is null
+            ? ""
+            : $$""", "Content-Range": "{{contentRange}}" """;
+
+        return $$"""
+        {
+          "priority": 1,
+          "request": { "method": "GET", "urlPath": "{{path}}"{{match}} },
+          "response": {
+            "status": {{status}},
+            "headers": { "Content-Type": "application/octet-stream"{{contentRangeHeader}} },
+            "body": "{{body}}"
+          }
+        }
+        """;
+    }
+
     public static string Users(params string[] ids)
         => $$"""{ "value": [ {{string.Join(",", ids.Select(i => $$"""{ "id": "{{i}}", "displayName": "{{i}}" }"""))}} ] }""";
 

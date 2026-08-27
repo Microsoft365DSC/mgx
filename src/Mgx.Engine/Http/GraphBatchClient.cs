@@ -350,9 +350,8 @@ public sealed class GraphBatchClient
         {
             telemetry.BatchLevelRetries = failedRetryable.Count;
 
-            // Backpressure delay before the batch-level retry pass.
-            // Minimum 2s pause to let throttle pressure subside before retrying failed items.
-            var backpressureDelay = 2;
+            // A pause before the batch-level retry pass lets throttle pressure subside
+            var backpressureDelay = Math.Min(2, _maxRetryAfterSeconds);
             var backpressureJitter = backpressureDelay * Random.Shared.NextDouble() * 0.5;
             _pendingVerbose.Enqueue(
                 $"Batch-level retry: {failedRetryable.Count} items exhausted per-chunk retries. "
@@ -599,10 +598,10 @@ public sealed class GraphBatchClient
 
             if (retryIndices.Count > 0 && attempt < MaxPerRequestRetries)
             {
-                var baseDelaySeconds = maxRetryAfterSeconds > 0
-                    ? maxRetryAfterSeconds
-                    : (int)Math.Pow(2, attempt);
-                // C4: Add 0-50% jitter to prevent thundering herd on batch retries
+                var baseDelaySeconds = Math.Min(
+                    maxRetryAfterSeconds > 0 ? maxRetryAfterSeconds : (int)Math.Pow(2, attempt),
+                    _maxRetryAfterSeconds);
+                // 0-50% jitter prevents a thundering herd on batch retries
                 var jitter = baseDelaySeconds * Random.Shared.NextDouble() * 0.5;
                 var retrySw = Stopwatch.StartNew();
                 await Task.Delay(TimeSpan.FromSeconds(baseDelaySeconds + jitter), cancellationToken);

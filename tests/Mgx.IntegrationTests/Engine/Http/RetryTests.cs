@@ -17,7 +17,7 @@ public class RetryTests
             failCount: 2,
             failStatus: (HttpStatusCode)429,
             successBody: TestData.SingleUser,
-            failHeaders: new() { ["Retry-After"] = "1" });
+            failHeaders: new() { ["Retry-After"] = "0" });
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
@@ -38,7 +38,8 @@ public class RetryTests
             successBody: TestData.SingleUser);
 
         using var httpClient = new HttpClient(handler);
-        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+        using var client = new ResilientGraphClient(httpClient,
+            new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAfterSeconds = 1 });
 
         var response = await client.GetAsync("https://graph.microsoft.com/v1.0/users/user1");
 
@@ -68,44 +69,41 @@ public class RetryTests
     public async Task Retry_RespectsRetryAfterHeader()
     {
         var handler = new MockHttpHandler();
-        handler.QueueResponse((HttpStatusCode)429, null, new() { ["Retry-After"] = "2" });
+        handler.QueueResponse((HttpStatusCode)429, null, new() { ["Retry-After"] = "1" });
         handler.QueueResponse(HttpStatusCode.OK, TestData.SingleUser);
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
 
-        var sw = Stopwatch.StartNew();
         var response = await client.GetAsync("https://graph.microsoft.com/v1.0/users/user1");
-        sw.Stop();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(2, handler.RequestCount);
-        // Should have waited at least 2 seconds for Retry-After
-        Assert.True(sw.ElapsedMilliseconds >= 1800, $"Expected >= 1800ms delay, got {sw.ElapsedMilliseconds}ms");
+        var gap = Assert.Single(handler.ArrivalGapsMs);
+        Assert.True(gap >= 800, $"Expected the server requested 1s delay, got {gap:F0}ms");
     }
 
     [Fact]
     public async Task Retry_UsesExponentialBackoff()
     {
         var handler = new MockHttpHandler();
-        // 3 failures, no Retry-After → should use exponential backoff
         handler.QueueFailuresThenSuccess(
-            failCount: 3,
+            failCount: 2,
             failStatus: HttpStatusCode.ServiceUnavailable,
             successBody: TestData.SingleUser);
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
 
-        var sw = Stopwatch.StartNew();
         var response = await client.GetAsync("https://graph.microsoft.com/v1.0/users/user1");
-        sw.Stop();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(4, handler.RequestCount);
-        // With base delay of 1s and 3 retries, exponential backoff should take at least:
-        // ~1s + ~2s + ~4s = ~7s (with jitter it could be less, but should be > 2s)
-        Assert.True(sw.ElapsedMilliseconds >= 2000, $"Expected >= 2000ms total delay, got {sw.ElapsedMilliseconds}ms");
+        Assert.Equal(3, handler.RequestCount);
+        // Two backoffs off a 1s base grow past a single base delay, jitter included
+        var gaps = handler.ArrivalGapsMs;
+        Assert.Equal(2, gaps.Count);
+        Assert.True(gaps.Sum() >= 1500,
+            $"Expected the backoff to grow, got {gaps[0]:F0}ms then {gaps[1]:F0}ms");
     }
 
     [Fact]
@@ -378,8 +376,6 @@ public class RetryTests
     [Fact]
     public async Task Retry_ClampsRetryAfterToMaxRetryAfterSeconds()
     {
-        // Server sends Retry-After: 120 (way above our test MaxRetryAfterSeconds=30).
-        // The pipeline should clamp the delay to MaxRetryAfterSeconds.
         var handler = new MockHttpHandler();
         handler.QueueResponse((HttpStatusCode)429, null, new() { ["Retry-After"] = "120" });
         handler.QueueResponse(HttpStatusCode.OK, TestData.SingleUser);
@@ -388,7 +384,7 @@ public class RetryTests
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions
         {
             NoRateLimit = true,
-            MaxRetryAfterSeconds = 30
+            MaxRetryAfterSeconds = 1
         });
 
         var sw = Stopwatch.StartNew();
@@ -397,12 +393,10 @@ public class RetryTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(2, handler.RequestCount);
-        // Clamped to 30s: actual delay should be around 30s, not 120s.
-        // Allow generous lower bound (25s) for timer precision, but must be well under 120s.
-        Assert.True(sw.ElapsedMilliseconds < 60_000,
-            $"Expected delay clamped to ~30s, but took {sw.ElapsedMilliseconds}ms (server requested 120s)");
-        Assert.True(sw.ElapsedMilliseconds >= 25_000,
-            $"Expected delay of ~30s (clamped from 120s), but only waited {sw.ElapsedMilliseconds}ms");
+        Assert.True(sw.ElapsedMilliseconds >= 800,
+            $"Expected the clamped 1s delay, but only waited {sw.ElapsedMilliseconds}ms");
+        Assert.True(sw.ElapsedMilliseconds < 10_000,
+            $"Expected the delay clamped to 1s, but took {sw.ElapsedMilliseconds}ms (server requested 120s)");
     }
 
     [Fact]
@@ -439,7 +433,7 @@ public class RetryTests
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions
         {
             NoRateLimit = true,
-            MaxRetryAfterSeconds = 30
+            MaxRetryAfterSeconds = 1
         });
 
         var messages = new List<string>();
@@ -452,7 +446,7 @@ public class RetryTests
         Assert.Single(messages);
         Assert.Contains("clamped to", messages[0]);
         Assert.Contains("120", messages[0]); // server requested
-        Assert.Contains("30", messages[0]);  // clamped to
+        Assert.Contains("1s", messages[0]);  // clamped to
     }
 
     [Fact]
@@ -591,7 +585,7 @@ public class RetryTests
         // RetryHandler honoring a long Retry-After). Polly's attempt timeout fires and
         // throws TimeoutRejectedException. This should be retried for idempotent methods.
         var handler = new SlowThenFastMockHandler(
-            slowDelayMs: 5000, // First attempt: takes 5s (exceeds 2s attempt timeout)
+            slowDelayMs: 5000,
             fastResponse: new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(TestData.SingleUser, System.Text.Encoding.UTF8, "application/json")
@@ -601,8 +595,9 @@ public class RetryTests
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions
         {
             NoRateLimit = true,
-            AttemptTimeoutSeconds = 2,   // Short timeout to trigger TimeoutRejectedException
-            TotalTimeoutSeconds = 30     // Plenty of time for retry
+            AttemptTimeoutSeconds = 1,
+            TotalTimeoutSeconds = 30,
+            MaxRetryAfterSeconds = 1
         });
 
         var response = await client.GetAsync("https://graph.microsoft.com/v1.0/users/user1");
@@ -626,7 +621,7 @@ public class RetryTests
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions
         {
             NoRateLimit = true,
-            AttemptTimeoutSeconds = 2,
+            AttemptTimeoutSeconds = 1,
             TotalTimeoutSeconds = 30
         });
 

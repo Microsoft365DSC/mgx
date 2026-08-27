@@ -108,7 +108,7 @@ public class SpeedWinsTests
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
         // Default concurrency = 1 (sequential)
-        var batchClient = new GraphBatchClient(client, batchChunkConcurrency: 1);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1, batchChunkConcurrency: 1);
 
         var ops = Enumerable.Range(0, 2).Select(i => new BatchOperation($"/users/user{i + 1}")).ToList();
         var result = await batchClient.ExecuteBatchIndexedAsync(ops);
@@ -127,7 +127,7 @@ public class SpeedWinsTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client, batchChunkConcurrency: 3);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1, batchChunkConcurrency: 3);
 
         var ops = Enumerable.Range(0, 40).Select(i => new BatchOperation($"/users/user{i}")).ToList();
         var result = await batchClient.ExecuteBatchIndexedAsync(ops);
@@ -148,7 +148,7 @@ public class SpeedWinsTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client, batchChunkConcurrency: 3);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1, batchChunkConcurrency: 3);
 
         var ops = Enumerable.Range(0, 40).Select(i => new BatchOperation($"/users/user{i}")).ToList();
         var result = await batchClient.ExecuteBatchIndexedAsync(ops);
