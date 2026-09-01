@@ -1,6 +1,6 @@
 @{
     RootModule        = 'M365DSC.mgx.psm1'
-    ModuleVersion     = '2.1.0'
+    ModuleVersion     = '2.1.1'
     GUID              = 'f978315f-75c0-48f5-b929-ca7a7757d1d2'
     Author            = 'Thomas Maillo Grome, Fabien Tschanz'
     CompanyName       = 'Mgx'
@@ -49,6 +49,9 @@
             LicenseUri   = 'https://github.com/Microsoft365DSC/mgx/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/Microsoft365DSC/mgx'
             ReleaseNotes = @'
+v2.1.1
+- Fixed Invoke-MgxRequest failing with a missing System.IO.Pipelines assembly on PowerShell 7.6 hosts that do not ship it.
+
 v2.1.0
 - Added Get-MgxContent, downloading file and media content whole or by byte range.
 - Added adaptive request pacing, on by default, spacing requests per workload ahead of the token bucket. Opt out with Set-MgxOption -NoAdaptivePacing.
