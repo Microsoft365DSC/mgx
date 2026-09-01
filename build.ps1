@@ -41,7 +41,6 @@ dotnet build "$PSScriptRoot/Mgx.slnx" -c $Configuration --nologo
 if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE" }
 
 # Copy Cmdlets + Engine DLLs (load in default ALC)
-# Detect TFM from csproj instead of hardcoding (survives TFM upgrades)
 $csproj = [xml](Get-Content "$PSScriptRoot/src/Mgx.Cmdlets/Mgx.Cmdlets.csproj")
 $tfm = @($csproj.Project.PropertyGroup.TargetFramework | Where-Object { $_ }) | Select-Object -First 1
 $CmdletsOutput = Join-Path $PSScriptRoot "src/Mgx.Cmdlets/bin/$Configuration/$tfm"
@@ -50,7 +49,6 @@ Copy-Item "$CmdletsOutput/Mgx.Cmdlets.pdb" $ModuleRoot -Force -ErrorAction Silen
 Copy-Item "$CmdletsOutput/Mgx.Engine.dll" $ModuleRoot -Force
 Copy-Item "$CmdletsOutput/Mgx.Engine.pdb" $ModuleRoot -Force -ErrorAction SilentlyContinue
 
-# Copy deps.json (useful for diagnostic tooling; deleted by clean step above)
 $depsJson = Join-Path $CmdletsOutput 'Mgx.Cmdlets.deps.json'
 if (Test-Path $depsJson) {
     Copy-Item $depsJson $ModuleRoot -Force
@@ -59,16 +57,13 @@ if (Test-Path $depsJson) {
 }
 
 # Copy third-party dependencies into Dependencies/ (loaded via ALC Resolving handler on first use)
-# Polly.Core and System.Threading.RateLimiting are not in the module root;
-# Mgx.Engine is NOT here - it is loaded via RequiredAssemblies in M365DSC.mgx.psd1 (see comment there).
 New-Item $DepsDir -ItemType Directory -Force | Out-Null
 
 # Copy dependency DLLs that need ALC isolation (Polly, RateLimiting)
-# After D1+D2: replaced Microsoft.Extensions.Http.Resilience with direct Polly.Core 8.6.6
-# This eliminated 28 transitive dependencies (51 total down to 23 packages)
 $DepsToIsolate = @(
     'Polly.Core.dll'
     'System.Threading.RateLimiting.dll'
+    'System.IO.Pipelines.dll'
 )
 
 foreach ($dep in $DepsToIsolate) {
@@ -82,7 +77,7 @@ foreach ($dep in $DepsToIsolate) {
 
 # Verify module output is in expected state
 $RequiredRoot = @('Mgx.Cmdlets.dll', 'Mgx.Engine.dll', 'M365DSC.mgx.psd1', 'M365DSC.mgx.psm1')
-$RequiredDeps = @('Polly.Core.dll', 'System.Threading.RateLimiting.dll')
+$RequiredDeps = @('Polly.Core.dll', 'System.Threading.RateLimiting.dll', 'System.IO.Pipelines.dll')
 
 foreach ($f in $RequiredRoot) {
     if (-not (Test-Path (Join-Path $ModuleRoot $f))) {
@@ -103,7 +98,6 @@ if ($orphans) {
 $helpSource = Join-Path $ModuleRoot 'help'
 $helpOutput = Join-Path $ModuleRoot 'en-US'
 if (Test-Path $helpSource) {
-    # -ListAvailable only searches PSModulePath, so check for an already-imported platyPS too
     if ((Get-Module platyPS) -or (Get-Module -ListAvailable platyPS)) {
         if (-not (Get-Module platyPS)) { Import-Module platyPS -ErrorAction Stop }
         New-ExternalHelp -Path $helpSource -OutputPath $helpOutput -Force | Out-Null
