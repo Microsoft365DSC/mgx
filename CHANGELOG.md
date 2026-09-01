@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.1
+
+### Fixed
+
+- `Invoke-MgxRequest` threw `FileNotFoundException` for `System.IO.Pipelines, Version=10.0.0.0` on hosts whose PowerShell 7.6 payload does not carry that assembly, such as the Azure DevOps `windows-2025-g2` image and Microsoft's Linux container images, which unpack PowerShell over a separately installed .NET runtime.
+
 ## 2.1.0
 
 Merges upstream `gromedev/mgx` 2.1.1. The module name, version line, target framework and CI remain this fork's.

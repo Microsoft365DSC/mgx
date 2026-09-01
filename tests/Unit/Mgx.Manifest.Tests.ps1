@@ -79,8 +79,8 @@ Describe 'Module payload' {
     }
 
     It 'isolates third-party dependencies under Dependencies/' {
-        # Polly and RateLimiting load through the ALC Resolving handler
-        foreach ($file in @('Polly.Core.dll', 'System.Threading.RateLimiting.dll'))
+        # Polly, RateLimiting and Pipelines load through the ALC Resolving handler
+        foreach ($file in @('Polly.Core.dll', 'System.Threading.RateLimiting.dll', 'System.IO.Pipelines.dll'))
         {
             Join-Path $script:Paths.ModuleRoot 'Dependencies' $file | Should -Exist
         }
