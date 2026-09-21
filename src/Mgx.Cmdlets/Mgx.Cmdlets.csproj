@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -6,6 +6,11 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Mgx.Cmdlets</RootNamespace>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <!-- net10.0 carries System.IO.Pipelines in Microsoft.NETCore.App, so the SDK prunes the
+         package reference below and nothing reaches the build output. The reference exists to
+         put that file in Dependencies/ for a host that does not supply it, so pruning has to
+         stay off here. Upstream targets net8.0, where the package is not pruned. -->
+    <RestoreEnablePackagePruning>false</RestoreEnablePackagePruning>
     <!-- See Mgx.Engine.csproj: CA1416 keeps Windows-only directory APIs out of the
          cross-platform code paths at build time rather than at a customer's runtime. -->
     <WarningsAsErrors>$(WarningsAsErrors);CA1416</WarningsAsErrors>
@@ -28,7 +33,7 @@
          resolver has only Dependencies/ to offer and nothing put it there. This reference is what
          puts it there, and one 10.0.x file answers both requests - a Resolving handler's answer
          is taken as given. ModuleAssemblyClosureTests pins the whole class of gap. -->
-    <PackageReference Include="System.IO.Pipelines" Version="10.0.11" />
+    <PackageReference Include="System.IO.Pipelines" Version="10.0.11" GeneratePathProperty="true" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
@@ -46,7 +51,13 @@
 
        A Debug build now leaves module/ alone. To stage Debug on purpose, ask for it:
        ./build.ps1 -Configuration Debug, which copies explicitly and does not rely on this. -->
-  <Target Name="StageModuleOutput" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+  <!-- Pruning is off for this package, but the file still has to be placed beside the build
+       output before anything copies it onward. -->
+  <Target Name="CopyPipelinesDependency" AfterTargets="Build">
+    <Copy SourceFiles="$(PkgSystem_IO_Pipelines)\lib\net10.0\System.IO.Pipelines.dll" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="StageModuleOutput" AfterTargets="Build" DependsOnTargets="CopyPipelinesDependency" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
       <ModuleRoot Condition="'$(ModuleRoot)' == ''">$(MSBuildThisFileDirectory)../../module</ModuleRoot>
       <DepsDir>$(ModuleRoot)/Dependencies</DepsDir>
