@@ -6,7 +6,6 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Mgx.Cmdlets</RootNamespace>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-    <RestoreEnablePackagePruning>false</RestoreEnablePackagePruning>
     <!-- See Mgx.Engine.csproj: CA1416 keeps Windows-only directory APIs out of the
          cross-platform code paths at build time rather than at a customer's runtime. -->
     <WarningsAsErrors>$(WarningsAsErrors);CA1416</WarningsAsErrors>
@@ -18,25 +17,39 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Management.Automation" Version="7.6.4" PrivateAssets="all" />
-    <PackageReference Include="System.IO.Pipelines" Version="10.0.0" GeneratePathProperty="true" PrivateAssets="all" />
+    <PackageReference Include="System.Management.Automation" Version="7.4.7" PrivateAssets="all" />
+    <!-- Carried, not compiled against. Nothing here or in the engine uses System.IO.Pipelines;
+         it is in the closure of the System.Text.Json the HOST supplies. The engine's reference
+         is to System.Text.Json 8.0, which needs no pipelines, but a host binds that reference to
+         whatever version it has: PowerShell 7.5 to 9.0 and 7.6 to 10.0, and both of those take
+         PipeReader and PipeWriter across their surface. net8.0 - what src/ targets - does not
+         carry System.IO.Pipelines in Microsoft.NETCore.App, so where the host does not supply it
+         either the first call that touches the JSON stack throws FileNotFoundException: the
+         resolver has only Dependencies/ to offer and nothing put it there. This reference is what
+         puts it there, and one 10.0.x file answers both requests - a Resolving handler's answer
+         is taken as given. ModuleAssemblyClosureTests pins the whole class of gap. -->
+    <PackageReference Include="System.IO.Pipelines" Version="10.0.11" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Mgx.Engine\Mgx.Engine.csproj" />
   </ItemGroup>
 
-  <Target Name="CopyPipelinesDependency" AfterTargets="Build">
-    <Copy SourceFiles="$(PkgSystem_IO_Pipelines)\lib\net10.0\System.IO.Pipelines.dll" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
-  </Target>
+  <!-- Post-build: auto-stage DLLs into module/ so IDE builds are never stale.
 
-  <!-- Stage DLLs into the module folder so IDE builds are never stale. Release only, a Debug
-       dotnet test would otherwise overwrite a Release-staged module -->
+       Release only, deliberately. This target used to run for every configuration, which
+       meant `dotnet test` - Debug by default - silently replaced a Release-staged module/
+       with Debug binaries. The natural release sequence is build.ps1, then tests, then
+       Publish-Module, so the test step undid the build step and the Gallery would have
+       received an unoptimised build with no warning anywhere. CI never hit it (it builds
+       Release and tests without rebuilding); publishing from a developer machine did.
 
-  <Target Name="StageModuleOutput" AfterTargets="Build" DependsOnTargets="CopyPipelinesDependency" Condition="'$(Configuration)' == 'Release'">
+       A Debug build now leaves module/ alone. To stage Debug on purpose, ask for it:
+       ./build.ps1 -Configuration Debug, which copies explicitly and does not rely on this. -->
+  <Target Name="StageModuleOutput" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
-      <ModuleRoot>$(MSBuildThisFileDirectory)..\..\Modules\M365DSC.mgx</ModuleRoot>
-      <DepsDir>$(ModuleRoot)\Dependencies</DepsDir>
+      <ModuleRoot Condition="'$(ModuleRoot)' == ''">$(MSBuildThisFileDirectory)../../module</ModuleRoot>
+      <DepsDir>$(ModuleRoot)/Dependencies</DepsDir>
     </PropertyGroup>
 
     <MakeDir Directories="$(DepsDir)" />
@@ -48,7 +61,7 @@
     <Copy SourceFiles="$(TargetDir)Mgx.Engine.pdb" DestinationFolder="$(ModuleRoot)" SkipUnchangedFiles="true" Condition="Exists('$(TargetDir)Mgx.Engine.pdb')" />
     <Copy SourceFiles="$(TargetDir)Mgx.Cmdlets.deps.json" DestinationFolder="$(ModuleRoot)" SkipUnchangedFiles="true" Condition="Exists('$(TargetDir)Mgx.Cmdlets.deps.json')" />
 
-    <!-- ALC-isolated dependencies -->
+    <!-- ALC-isolated dependencies, and the one assembly carried for a host that may lack it -->
     <Copy SourceFiles="$(TargetDir)Polly.Core.dll" DestinationFolder="$(DepsDir)" SkipUnchangedFiles="true" Condition="Exists('$(TargetDir)Polly.Core.dll')" />
     <Copy SourceFiles="$(TargetDir)System.Threading.RateLimiting.dll" DestinationFolder="$(DepsDir)" SkipUnchangedFiles="true" Condition="Exists('$(TargetDir)System.Threading.RateLimiting.dll')" />
     <Copy SourceFiles="$(TargetDir)System.IO.Pipelines.dll" DestinationFolder="$(DepsDir)" SkipUnchangedFiles="true" Condition="Exists('$(TargetDir)System.IO.Pipelines.dll')" />

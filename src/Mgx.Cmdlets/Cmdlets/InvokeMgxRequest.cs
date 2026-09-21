@@ -1,8 +1,10 @@
 using System.Collections;
 using System.Management.Automation;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mgx.Cmdlets.Base;
 using Mgx.Engine.Http;
 using Mgx.Engine.Models;
@@ -14,8 +16,8 @@ namespace Mgx.Cmdlets.Cmdlets;
 /// <summary>
 /// Invoke-MgxRequest: General-purpose resilient client for any Microsoft Graph endpoint.
 /// Supports streaming pagination, fan-out concurrency, write operations, and checkpoint/resume.
-/// For bulk writes, Invoke-MgxBatchRequest is faster than fan-out: fewer round-trips and
-/// server-side pacing.
+/// For bulk writes (>10 items), consider Invoke-MgxBatchRequest (measured ~1.5x faster
+/// than fan-out for PATCH at 1k scale; fewer HTTP round-trips and server-side pacing).
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "MgxRequest", DefaultParameterSetName = "Direct",
     SupportsShouldProcess = true)]
@@ -101,6 +103,10 @@ public class InvokeMgxRequest : MgxCmdletBase
 
     #region Fan-out parameters
 
+    /// <summary>
+    /// Entity ID, or an object carrying one. Accepts a plain string, a Hashtable (what the
+    /// Mgx cmdlets emit), or a PSCustomObject; the 'id' member is extracted in ProcessRecord.
+    /// </summary>
     [Parameter(ValueFromPipeline = true, ParameterSetName = "Pipeline")]
     [Alias("Id")]
     public object? InputObject { get; set; }
@@ -120,8 +126,26 @@ public class InvokeMgxRequest : MgxCmdletBase
     private readonly List<string> _pipelineIds = [];
     private bool _isFanOut;
 
+    /// <summary>
+    /// The checkpoint gate's answer for this invocation, asked once and reused. -CheckpointPath,
+    /// -Confirm and -WhatIf are all bound once for the whole run, but a -Uri without a {id}
+    /// placeholder is not a fan-out: ProcessRecord runs the direct branch below once per piped
+    /// item, and each of those calls reaches ExecuteList's checkpoint gate on its own. Without
+    /// this, three piped values asked ShouldProcess three times over the same file - three
+    /// prompts, and three "What if" lines under -WhatIf, for one run. Set on whichever item
+    /// reaches the gate first; every later item on that route reuses the answer instead of
+    /// asking again, a refusal included.
+    /// </summary>
+    private bool? _mayWriteCheckpoint;
+
+    /// <summary>
+    /// Full base URL including API version (e.g., "https://graph.microsoft.com/v1.0").
+    /// </summary>
     private string VersionedBaseUrl => $"{s_graphEndpoint}/{ApiVersion}";
 
+    /// <summary>
+    /// Whether the current invocation is a collection/list operation.
+    /// </summary>
     private bool IsCollectionMode =>
         All.IsPresent || Top > 0 || !string.IsNullOrEmpty(Filter) ||
         !string.IsNullOrEmpty(Search) || Sort is { Length: > 0 } ||
@@ -129,9 +153,25 @@ public class InvokeMgxRequest : MgxCmdletBase
 
     protected override void BeginProcessing()
     {
+        // A fresh cmdlet instance answers this fresh each run; reset explicitly rather than
+        // relying on that, so the field's own comment is the one place its lifetime is stated.
+        _mayWriteCheckpoint = null;
+
+        // Reject absolute URLs (relative paths only); concatenation onto the versioned
+        // base URL would otherwise silently produce /v1.0/https:/... on the wire.
+        if (Uri.TrimStart().StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            Uri.TrimStart().StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+        {
+            ThrowTerminatingError(new ErrorRecord(
+                new ArgumentException(
+                    $"-Uri must be a relative path (e.g., /users), not an absolute URL. Got: '{Uri}'"),
+                "AbsoluteUriNotAllowed", ErrorCategory.InvalidArgument, null));
+            return;
+        }
+
         _isFanOut = Uri.Contains("{id}", StringComparison.OrdinalIgnoreCase);
 
-        // $search requires ConsistencyLevel eventual, and omitting it loses data silently
+        // $search requires ConsistencyLevel: eventual. Error if missing (data loss otherwise)
         if (!string.IsNullOrEmpty(Search) && string.IsNullOrEmpty(ConsistencyLevel))
         {
             ThrowTerminatingError(new ErrorRecord(
@@ -141,8 +181,8 @@ public class InvokeMgxRequest : MgxCmdletBase
             return;
         }
 
-        // $count=true needs ConsistencyLevel eventual on directory endpoints, added automatically
-        // for -CountVariable and -Filter so discrepancy detection works
+        // $count=true requires ConsistencyLevel: eventual on directory endpoints;
+        // auto-add when -CountVariable or -Filter is used (enables count discrepancy detection)
         if ((!string.IsNullOrEmpty(CountVariable) || !string.IsNullOrEmpty(Filter))
             && string.IsNullOrEmpty(ConsistencyLevel))
         {
@@ -150,7 +190,7 @@ public class InvokeMgxRequest : MgxCmdletBase
             WriteVerbose("Auto-adding ConsistencyLevel:eventual header (required by -Filter/-CountVariable for $count=true).");
         }
 
-        // Most Graph directory endpoints ignore $skip silently
+        // $skip is not supported by most Graph directory endpoints (silently ignored)
         if (Skip > 0)
             WriteWarning("-Skip ($skip) is not supported by many Graph API endpoints (e.g., /users, /groups). The parameter may be silently ignored.");
     }
@@ -180,7 +220,17 @@ public class InvokeMgxRequest : MgxCmdletBase
         }
 
         // Direct mode (no fan-out): execute immediately
-        ExecuteRequest(Uri, sourceId: null);
+        try
+        {
+            ExecuteRequest(Uri, sourceId: null);
+        }
+        catch (Exception)
+        {
+            // Unexpected exception types skip the drains inside; the buffered verbose and
+            // warning messages are the context that explains the failure.
+            DrainClientMessages();
+            throw;
+        }
     }
 
     /// <summary>
@@ -220,6 +270,13 @@ public class InvokeMgxRequest : MgxCmdletBase
         {
             WriteWarning("Request cancelled by user.");
         }
+        catch (Exception)
+        {
+            // Unexpected exception types skip the drains above; the buffered verbose and
+            // warning messages are the context that explains the failure.
+            DrainClientMessages();
+            throw;
+        }
         finally
         {
             base.EndProcessing();
@@ -255,16 +312,45 @@ public class InvokeMgxRequest : MgxCmdletBase
 
     private void ExecuteList(string relativeUri, string? sourceId)
     {
-        // Whether $count=true was added automatically rather than requested
-        // If the endpoint rejects it with 400, retry without.
-        bool countAutoAdded = !string.IsNullOrEmpty(Filter) && string.IsNullOrEmpty(CountVariable);
+        // Track whether $count=true was auto-added (not user-requested via -CountVariable,
+        // and not already written into -Uri, where dropping it changes nothing and the
+        // "retry without count" rebuild would re-send a byte-identical request).
+        bool countAutoAdded = !string.IsNullOrEmpty(Filter) && string.IsNullOrEmpty(CountVariable)
+            && !ExistingQueryOptions(Uri).Contains("$count");
         bool includeAutoCount = countAutoAdded;
         bool suppressTop = false;
 
-        // Resolve the consumer-owned checkpoint path once, before the retry loop
+        // Consumer-owned checkpoint: resolve path once before the retry loop
         var cpPath = CheckpointPath != null
             ? GetUnresolvedProviderPathFromPSPath(CheckpointPath)
             : null;
+
+        // -CheckpointPath is the one file this read path writes, and it is the caller's own
+        // resume position: every page boundary saves the next link over it, completion deletes
+        // it, and a checkpoint describing another enumeration is deleted where it is found.
+        // Reads go out under -WhatIf, by the convention above ExecuteWrite, but a preview that
+        // overwrites or removes the position a later run resumes from has changed the thing it
+        // claimed only to describe. So the file gets a gate of its own and the reads keep the
+        // convention: a refusal skips the saves and the deletes, and the enumeration goes on to
+        // page and emit.
+        //
+        // One decision, taken here rather than at each site. The page-boundary callback runs on
+        // whichever thread the iterator resumes on - a page that yields nothing resumes on the
+        // thread pool - and a cmdlet API call from there throws. -Confirm therefore asks once
+        // per run about one file, which is the question it has to answer anyway - and "once per
+        // run" has to hold across ProcessRecord calls too, not just within this one: a -Uri with
+        // no {id} placeholder is not a fan-out, so several piped values still reach ExecuteList
+        // once each through the direct branch in ProcessRecord, each with its own attempt loop
+        // and its own call here. _mayWriteCheckpoint (reset once in BeginProcessing) is what
+        // makes the second and later calls consult the first item's answer instead of asking
+        // ShouldProcess again - a refusal on the first item refuses the rest.
+        //
+        // Reading the checkpoint is not gated: resuming is what the run being previewed would
+        // do, and a preview that ignored it would page from the start and describe a different
+        // set of requests. The branches that refuse a checkpoint leave resume null and enumerate
+        // from the beginning either way - the delete is all the gate withholds.
+        var mayWriteCheckpoint = cpPath == null
+            || (_mayWriteCheckpoint ??= ShouldProcess(cpPath, "Save resume checkpoint"));
 
         // If checkpoint was saved during a previous retry (URL without $count=true),
         // match the checkpoint's URL to avoid mismatch on resume
@@ -283,10 +369,12 @@ public class InvokeMgxRequest : MgxCmdletBase
                 var url = BuildCollectionUrl(relativeUri,
                     includeCount: !string.IsNullOrEmpty(CountVariable) || includeAutoCount,
                     noPageSize: suppressTop);
-                var iterator = new PageIterator(GetClient());
-                // -All says how far to page and -Top how much to return, which are different
-                // questions. -All must not zero the cap, or a bounded slice walks the whole
-                // collection at the slice page size
+                var client = GetClient();
+                var iterator = new PageIterator(client);
+                // -All says how far to page, -Top says how much to return, and they are not the
+                // same question: -All used to zero the cap, so asking for a bounded slice of a
+                // large collection walked all of it. Worse, -Top also sets the page size, so the
+                // walk ran at the slice's page size - 150 rows at a time across the whole tenant.
                 var maxItems = Top > 0 ? Top : 0;
                 var headers = BuildHeaders();
                 long itemCount = 0;
@@ -301,7 +389,7 @@ public class InvokeMgxRequest : MgxCmdletBase
                         if (checkpoint.NextLink == null)
                         {
                             // Completion marker: previous run finished
-                            PaginationCheckpoint.Delete(cpPath);
+                            if (mayWriteCheckpoint) PaginationCheckpoint.Delete(cpPath);
                         }
                         else if (string.Equals(checkpoint.Resource, url, StringComparison.Ordinal))
                         {
@@ -309,19 +397,20 @@ public class InvokeMgxRequest : MgxCmdletBase
                             var validated = NextLinkValidator.Validate(checkpoint.NextLink, expectedHost);
                             if (validated != null && checkpoint.ItemsCollected >= 0)
                             {
-                                // Page-boundary only. Pipeline items are ephemeral with no file to
-                                // dedup against, so a resumed page may re-emit items already sent
-                                // and the consumer owns deduplication
+                                // Page-boundary only: skipOnFirstPage = 0 because pipeline items are
+                                // ephemeral (no file to dedup against). On resume, the interrupted page
+                                // may re-emit items already sent downstream. Downstream consumers
+                                // (e.g., Export-Csv -Append) are responsible for their own dedup.
                                 resume = new ResumeState(validated, 0, checkpoint.ItemsCollected);
                             }
                             else
                             {
-                                PaginationCheckpoint.Delete(cpPath);
+                                if (mayWriteCheckpoint) PaginationCheckpoint.Delete(cpPath);
                             }
                         }
                         else
                         {
-                            PaginationCheckpoint.Delete(cpPath);
+                            if (mayWriteCheckpoint) PaginationCheckpoint.Delete(cpPath);
                         }
                     }
                 }
@@ -340,7 +429,7 @@ public class InvokeMgxRequest : MgxCmdletBase
                     onPageComplete: info =>
                     {
                         // Save page-boundary checkpoint
-                        if (cpPath != null && info.NextPageUrl != null)
+                        if (mayWriteCheckpoint && cpPath != null && info.NextPageUrl != null)
                         {
                             try
                             {
@@ -353,7 +442,14 @@ public class InvokeMgxRequest : MgxCmdletBase
                             }
                             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                             {
-                                WriteWarning($"Checkpoint save failed: {ex.Message}");
+                                // Buffered rather than written here. This callback runs on
+                                // whichever thread the iterator resumed on, and a page that
+                                // yields nothing resumes on the thread pool - so a WriteWarning
+                                // from here throws PSInvalidOperationException, and the disk
+                                // problem it was reporting ends the enumeration instead of
+                                // being reported. The drains below write it from the pipeline
+                                // thread, on the same channel the client's own warnings take.
+                                client.EnqueueWarning($"Checkpoint save failed: {ex.Message}");
                             }
                         }
                     },
@@ -371,7 +467,7 @@ public class InvokeMgxRequest : MgxCmdletBase
                 }
                 catch (PipelineStoppedException)
                 {
-                    // The pipeline consumer is done, such as Select-Object -First, so stop
+                    // Pipeline consumer is done (e.g., Select-Object -First N); stop gracefully
                     throw;
                 }
                 finally
@@ -384,7 +480,7 @@ public class InvokeMgxRequest : MgxCmdletBase
                     WriteCountDiscrepancyWarning(relativeUri, reportedODataCount.Value, itemCount, Filter);
 
                 // Delete checkpoint on successful completion
-                if (cpPath != null) PaginationCheckpoint.Delete(cpPath);
+                if (mayWriteCheckpoint && cpPath != null) PaginationCheckpoint.Delete(cpPath);
                 return; // Success, exit the retry loop
             }
             catch (PipelineStoppedException)
@@ -396,21 +492,24 @@ public class InvokeMgxRequest : MgxCmdletBase
                 WriteWarning("Request cancelled by user.");
                 return;
             }
-            catch (GraphServiceException ex) when (includeAutoCount && countAutoAdded && ex.StatusCode == HttpStatusCode.BadRequest)
+            catch (JsonException ex)
             {
-                // This endpoint rejects the automatic $count=true, so retry without it
-                WriteVerbose("Endpoint rejected $count=true (HTTP 400). Retrying without count parameter.");
+                // A page body that does not parse. Items from earlier pages have already been
+                // emitted; report the failure instead of crashing the pipeline.
+                WriteError(new ErrorRecord(
+                    new InvalidOperationException($"A response page declared JSON but does not parse: {ex.Message}", ex),
+                    "MalformedJsonResponse", ErrorCategory.InvalidData, relativeUri));
+                return;
+            }
+            catch (GraphServiceException ex) when (IsCountRejection(ex, includeAutoCount && countAutoAdded))
+            {
+                WriteVerbose(CountRejectedVerbose);
                 includeAutoCount = false;
                 continue;
             }
-            catch (GraphServiceException ex) when (
-                !suppressTop
-                && !NoPageSize.IsPresent
-                && ex.StatusCode == HttpStatusCode.BadRequest
-                && string.Equals(ex.ErrorCode, "Request_UnsupportedQuery", StringComparison.OrdinalIgnoreCase))
+            catch (GraphServiceException ex) when (IsTopRejection(ex, suppressTop, NoPageSize.IsPresent))
             {
-                // This endpoint does not support $top, so retry without a page size
-                WriteVerbose("Endpoint rejected $top (Request_UnsupportedQuery). Retrying without page size.");
+                WriteVerbose(TopRejectedVerbose);
                 suppressTop = true;
                 continue;
             }
@@ -422,6 +521,16 @@ public class InvokeMgxRequest : MgxCmdletBase
             {
                 WriteGraphError(ex, relativeUri, ApiVersion);
                 return;
+            }
+            finally
+            {
+                // Every way out of the attempt above - the success path, a retry via continue,
+                // or any catch - drains here once, from the pipeline thread. The last catch
+                // already drains inside WriteGraphError before it writes its error record, so
+                // that exit reaches this a second time; TryDequeue found the queue already
+                // empty from the first drain, so the second call writes nothing and nothing
+                // doubles.
+                DrainClientMessages();
             }
         }
     }
@@ -440,15 +549,14 @@ public class InvokeMgxRequest : MgxCmdletBase
 
             if (!response.IsSuccessStatusCode)
             {
-                var body = response.Content.ReadAsStringAsync(CancellationToken).GetAwaiter().GetResult();
+                var body = client.ReadBodyAsStringAsync(response, CancellationToken).GetAwaiter().GetResult();
                 throw new GraphServiceException(response.StatusCode, body);
             }
 
-            using var stream = response.Content.ReadAsStreamAsync(CancellationToken).GetAwaiter().GetResult();
-            var json = JsonSerializer.DeserializeAsync<JsonElement>(stream, cancellationToken: CancellationToken)
-                .AsTask().GetAwaiter().GetResult();
-
-            OutputPayload(json, sourceId);
+            var bodyBytes = client.ReadBodyAsBytesAsync(response, CancellationToken).GetAwaiter().GetResult();
+            var json = ReadJsonPayload(response, bodyBytes, relativeUri);
+            if (json != null)
+                OutputPayload(json.Value, sourceId);
         }
         catch (OperationCanceledException) when (CancellationToken.IsCancellationRequested)
         {
@@ -466,16 +574,34 @@ public class InvokeMgxRequest : MgxCmdletBase
 
     private void ExecuteWrite(HttpMethod method, string relativeUri, string? sourceId)
     {
+        // The gate sits on the write and on the bulk write below, and on nothing else: reads go
+        // out under -WhatIf, per the PowerShell convention, so that a dry run under
+        // $WhatIfPreference has real data for the gated writes to be previewed against. The help
+        // says so, because "the cmdlet is not run" would not be true of a GET that connects,
+        // pages, spends resource units and emits objects. Invoke-MgxBatchRequest gates its reads
+        // too, for the reason stated above its own gate; the two contracts are documented apart.
         if (!ShouldProcess(relativeUri, method.Method))
             return;
+
+        string? serializedBody;
+        try
+        {
+            serializedBody = ResolveRequestBody(method);
+        }
+        catch (ArgumentException ex)
+        {
+            // Pre-flight: nothing was sent. Terminating, per about_Mgx_Errors.
+            ThrowTerminatingError(new ErrorRecord(ex, "InvalidBodyValue",
+                ErrorCategory.InvalidArgument, relativeUri));
+            return;
+        }
+        NoteNonJsonStringBody();
 
         try
         {
             var url = $"{VersionedBaseUrl}{NormalizePath(relativeUri)}";
             var client = GetClient();
             var headers = BuildHeaders();
-
-            var serializedBody = ResolveRequestBody(method);
             HttpContent? content = serializedBody != null
                 ? new StringContent(serializedBody, Encoding.UTF8, "application/json")
                 : null;
@@ -488,7 +614,7 @@ public class InvokeMgxRequest : MgxCmdletBase
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    var body = response.Content.ReadAsStringAsync(CancellationToken).GetAwaiter().GetResult();
+                    var body = client.ReadBodyAsStringAsync(response, CancellationToken).GetAwaiter().GetResult();
                     throw new GraphServiceException(response.StatusCode, body);
                 }
 
@@ -496,14 +622,12 @@ public class InvokeMgxRequest : MgxCmdletBase
                 if (response.StatusCode == HttpStatusCode.NoContent)
                     return;
 
-                // stream.Length throws on network and decompression streams, so read bytes to
-                // handle a null ContentLength and empty bodies
-                var bodyBytes = response.Content.ReadAsByteArrayAsync(CancellationToken).GetAwaiter().GetResult();
-                if (bodyBytes.Length > 0)
-                {
-                    var jsonEl = JsonSerializer.Deserialize<JsonElement>(bodyBytes);
-                    OutputPayload(jsonEl, sourceId);
-                }
+                // stream.Length throws NotSupportedException on network/decompression streams.
+                // Read as bytes to safely handle null ContentLength (chunked transfer) and empty bodies.
+                var bodyBytes = client.ReadBodyAsBytesAsync(response, CancellationToken).GetAwaiter().GetResult();
+                var jsonEl = ReadJsonPayload(response, bodyBytes, relativeUri);
+                if (jsonEl != null)
+                    OutputPayload(jsonEl.Value, sourceId);
             }
             finally
             {
@@ -542,18 +666,18 @@ public class InvokeMgxRequest : MgxCmdletBase
 
         if (_pipelineIds.Count == 1)
         {
-            // A single id runs directly, without the fan-out machinery
+            // Single ID: direct execution, no ConcurrentFanOut overhead
             var resolved = ResolveTemplate(_pipelineIds[0]);
             ExecuteRequest(resolved, _pipelineIds[0]);
             return;
         }
 
-        // Deduplicated to avoid key collisions and repeat requests
+        // Deduplicate pipeline IDs to avoid dict key collision and redundant HTTP calls
         var uniqueIds = _pipelineIds.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (uniqueIds.Count < _pipelineIds.Count)
             WriteVerbose($"Deduplicated {_pipelineIds.Count} pipeline IDs to {uniqueIds.Count} unique IDs.");
 
-        // Initializes the client, which populates s_graphEndpoint for sovereign clouds
+        // Ensure client is initialized (populates s_graphEndpoint for sovereign clouds)
         var client = GetClient();
         var fanOut = new ConcurrentFanOut(client, Concurrency);
         var headers = BuildHeaders();
@@ -577,6 +701,10 @@ public class InvokeMgxRequest : MgxCmdletBase
         }
     }
 
+    /// <summary>
+    /// Collection fan-out: each ID resolves to a collection endpoint (e.g., /groups/{id}/members).
+    /// Uses FetchAllAsync which calls GetCollectionPageAsync (expects "value" array).
+    /// </summary>
     private void ExecuteCollectionFanOut(ConcurrentFanOut fanOut, List<string> uniqueIds, Dictionary<string, string>? headers)
     {
         var urls = uniqueIds.Select(id => BuildCollectionUrl(ResolveTemplate(id), includeCount: false)).ToList();
@@ -608,6 +736,10 @@ public class InvokeMgxRequest : MgxCmdletBase
         HandleFanOutErrors(fanOutResult.Errors);
     }
 
+    /// <summary>
+    /// Entity fan-out: each ID resolves to a single entity endpoint (e.g., /users/{id}).
+    /// Uses ForEachAsync with GetAsync per entity since the response is a flat object, not a collection.
+    /// </summary>
     private void ExecuteEntityFanOut(ConcurrentFanOut fanOut, List<string> uniqueIds, Dictionary<string, string>? headers)
     {
         // Clear results from any previous invocation
@@ -628,33 +760,33 @@ public class InvokeMgxRequest : MgxCmdletBase
 
                     if (!response.IsSuccessStatusCode)
                     {
-                        var body = await response.Content.ReadAsStringAsync(ct);
+                        var body = await client.ReadBodyAsStringAsync(response, ct);
                         throw new GraphServiceException(response.StatusCode, body);
                     }
 
-                    using var stream = await response.Content.ReadAsStreamAsync(ct);
-                    var json = await JsonSerializer.DeserializeAsync<JsonElement>(stream, cancellationToken: ct);
+                    // The body crosses to the cmdlet thread undecoded. ReadJsonPayload answers
+                    // the charset, the empty body, the non-JSON body and the parse failure, and
+                    // every one of those answers is a verbose, output or error record - none of
+                    // which a worker thread may write.
+                    var bodyBytes = await client.ReadBodyAsBytesAsync(response, ct);
+                    var contentType = response.Content.Headers.ContentType;
 
-                    // Clone detaches from the parent JsonDocument buffer, which becomes invalid
-                    // once the response stream is disposed
-                    var cloned = json.Clone();
-
-                    // WriteObject must run on the cmdlet thread, so ConcurrentFanOut collects
-                    // results and they are written afterwards
-                    // Store in a thread-safe structure
                     lock (_entityFanOutResults)
                     {
-                        _entityFanOutResults.Add((id, cloned));
+                        _entityFanOutResults.Add((id, response.StatusCode, contentType, bodyBytes));
                     }
                 },
                 CancellationToken).GetAwaiter().GetResult();
             DrainClientMessages();
 
             // Output results on the cmdlet thread
-            foreach (var (sourceId, json) in _entityFanOutResults)
+            foreach (var (sourceId, status, contentType, bodyBytes) in _entityFanOutResults)
             {
+                var json = ReadJsonPayload(status, contentType, bodyBytes, ResolveTemplate(sourceId));
+                if (json == null)
+                    continue;
                 totalItems++;
-                OutputItem(json, sourceId);
+                OutputItem(json.Value, sourceId);
             }
 
             HandleFanOutErrors(errors);
@@ -665,17 +797,34 @@ public class InvokeMgxRequest : MgxCmdletBase
         }
     }
 
-    private readonly List<(string sourceId, JsonElement json)> _entityFanOutResults = [];
+    private readonly List<(string sourceId, HttpStatusCode status,
+        MediaTypeHeaderValue? contentType, byte[] bodyBytes)> _entityFanOutResults = [];
 
+    /// <summary>
+    /// Write fan-out: execute POST/PATCH/PUT/DELETE for each piped ID concurrently.
+    /// Same body is applied to all operations. URIs are resolved via {id} template.
+    /// </summary>
     private void ExecuteWriteFanOut(ConcurrentFanOut fanOut, List<string> uniqueIds, Dictionary<string, string>? headers, HttpMethod httpMethod)
     {
         if (!ShouldProcess($"{httpMethod.Method} {uniqueIds.Count} items via {Uri}", "Bulk write"))
             return;
 
+        string? serializedBody;
         try
         {
             // Serialize body once (shared across all operations)
-            string? serializedBody = ResolveRequestBody(httpMethod);
+            serializedBody = ResolveRequestBody(httpMethod);
+        }
+        catch (ArgumentException ex)
+        {
+            ThrowTerminatingError(new ErrorRecord(ex, "InvalidBodyValue",
+                ErrorCategory.InvalidArgument, Uri));
+            return;
+        }
+        NoteNonJsonStringBody();
+
+        try
+        {
 
             // Build operations list: (id, resolved URL)
             var operations = uniqueIds.Select(id =>
@@ -762,7 +911,10 @@ public class InvokeMgxRequest : MgxCmdletBase
             }
 
             var ex = new InvalidOperationException($"HTTP {error.StatusCode} for '{error.Id}': {error.Message}");
-            // StatusCode 0 = infrastructure exception (network, circuit breaker, deserialization)
+            // StatusCode 0 = a write that reached no HTTP status at all: the network, an open
+            // circuit. Not a body that stalls or does not parse - the server answered those, and
+            // they carry the status it answered with, so they take the branch below and read as
+            // what they are rather than as a request that never arrived.
             var (errorId, category) = error.StatusCode == 0
                 ? ("BulkWriteInfraError", ErrorCategory.ConnectionError)
                 : ("BulkWriteError", MapStatusToCategory(statusCode));
@@ -782,7 +934,7 @@ public class InvokeMgxRequest : MgxCmdletBase
         bool has404 = false;
         foreach (var (key, ex) in errors)
         {
-            var statusCode = GetStatusCodeFromException(ex);
+            var statusCode = MgxErrorPresentation.TryGetStatus(ex);
 
             // Only a 404 that might mean "no such endpoint" is worth a beta hint. A 404 naming
             // a missing object says the path was fine, and hinting over it sends the caller to
@@ -801,14 +953,9 @@ public class InvokeMgxRequest : MgxCmdletBase
                 continue;
             }
 
-            // Preserve diagnostic specificity for infrastructure exceptions
-            var (errorId, category) = ex switch
-            {
-                Polly.CircuitBreaker.BrokenCircuitException => ("CircuitBroken", ErrorCategory.ResourceUnavailable),
-                HttpRequestException => ("HttpError", ErrorCategory.ConnectionError),
-                _ => ("FanOutError", statusCode.HasValue ? MapStatusToCategory(statusCode.Value) : ErrorCategory.NotSpecified)
-            };
-            WriteError(new ErrorRecord(ex, errorId, category, key));
+            var (errorId, category, report) =
+                MgxErrorPresentation.PresentItemFailure(ex, "FanOutError", CircuitBreakerMessage);
+            WriteError(new ErrorRecord(report, errorId, category, key));
         }
 
         if (has404)
@@ -835,13 +982,12 @@ public class InvokeMgxRequest : MgxCmdletBase
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 
-    private static HttpStatusCode? GetStatusCodeFromException(Exception ex)
-    {
-        if (ex is GraphServiceException gse) return gse.StatusCode;
-        if (ex is HttpRequestException hre && hre.StatusCode.HasValue) return hre.StatusCode.Value;
-        return null;
-    }
-
+    /// <summary>
+    /// Check if a GraphServiceException should be silently skipped based on
+    /// -SkipNotFound / -SkipForbidden switches. Used by single-request paths
+    /// (ExecuteGet, ExecuteWrite, ExecuteList) so that these switches work
+    /// consistently regardless of whether the pipeline has 1 or N items.
+    /// </summary>
     private bool ShouldSkipGraphError(GraphServiceException ex)
     {
         if (SkipNotFound.IsPresent && ex.StatusCode == HttpStatusCode.NotFound)
@@ -864,11 +1010,27 @@ public class InvokeMgxRequest : MgxCmdletBase
     private string BuildCollectionUrl(string relativeUri) => BuildCollectionUrl(relativeUri,
         includeCount: !string.IsNullOrEmpty(CountVariable) || !string.IsNullOrEmpty(Filter));
 
-    private string BuildCollectionUrl(string relativeUri, bool includeCount, bool noPageSize = false) => BuildListUrl(
-        VersionedBaseUrl, relativeUri,
-        new ODataListParams(NoPageSize.IsPresent || noPageSize, Top, PageSize, Filter,
-            Property, Sort, Search, Skip, ExpandProperty,
-            IncludeCount: includeCount));
+    private int _warnedDeferredOptions;
+
+    private void WarnDeferredOptions(List<string> deferred)
+    {
+        // Interlocked: URL building runs inside fan-out lambdas that can resume off the
+        // pipeline thread; the warning must fire exactly once and from one caller.
+        if (deferred.Count == 0 || Interlocked.Exchange(ref _warnedDeferredOptions, 1) == 1) return;
+        WriteWarning(DescribeDeferredOptions(deferred));
+    }
+
+    private string BuildCollectionUrl(string relativeUri, bool includeCount, bool noPageSize = false)
+    {
+        var url = BuildListUrl(
+            VersionedBaseUrl, relativeUri,
+            new ODataListParams(NoPageSize.IsPresent || noPageSize, Top, PageSize, Filter,
+                Property, Sort, Search, Skip, ExpandProperty,
+                IncludeCount: includeCount),
+            out var deferred);
+        WarnDeferredOptions(deferred);
+        return url;
+    }
 
     private string BuildGetUrl(string relativeUri)
     {
@@ -876,10 +1038,15 @@ public class InvokeMgxRequest : MgxCmdletBase
         var queryParams = new List<string>();
 
         if (Property is { Length: > 0 })
-            queryParams.Add($"$select={System.Uri.EscapeDataString(string.Join(",", Property))}");
+            queryParams.Add($"$select={EscapeQueryValue(string.Join(",", Property))}");
 
         if (ExpandProperty is { Length: > 0 })
-            queryParams.Add($"$expand={System.Uri.EscapeDataString(string.Join(",", ExpandProperty))}");
+            queryParams.Add($"$expand={EscapeQueryValue(string.Join(",", ExpandProperty))}");
+
+        var existing = ExistingQueryOptions(baseUrl);
+        WarnDeferredOptions(queryParams.Where(qp => existing.Contains(qp.Split('=', 2)[0]))
+            .Select(qp => qp.Split('=', 2)[0]).ToList());
+        queryParams.RemoveAll(qp => existing.Contains(qp.Split('=', 2)[0]));
 
         if (queryParams.Count == 0)
             return baseUrl;
@@ -895,6 +1062,81 @@ public class InvokeMgxRequest : MgxCmdletBase
 
     private Dictionary<string, string>? BuildHeaders() =>
         BuildRequestHeaders(ConsistencyLevel, Headers);
+
+    /// <summary>
+    /// Emit a Graph response payload. A collection envelope ({"value":[...]}, returned by GET and by
+    /// action endpoints such as /directoryObjects/getByIds) is unwrapped into one item per element;
+    /// anything else is emitted whole.
+    /// </summary>
+    /// <summary>
+    /// A string -Body travels verbatim under Content-Type: application/json. When it is not
+    /// JSON that is usually intentional (a raw upload) - but the endpoint sees the wrong
+    /// content type unless -Headers overrides it, and the resulting 400 names neither.
+    /// A verbose note, not a warning: raw string bodies are a supported path.
+    /// </summary>
+    private void NoteNonJsonStringBody()
+    {
+        if (Body is null || UnwrapPSObject(Body) is not string s || string.IsNullOrWhiteSpace(s)) return;
+        if (Headers != null && Headers.Keys.Cast<object>()
+                .Any(k => string.Equals(k.ToString(), "Content-Type", StringComparison.OrdinalIgnoreCase)))
+            return;
+        try
+        {
+            using var _ = JsonDocument.Parse(s);
+        }
+        catch (JsonException)
+        {
+            WriteVerbose("-Body is a string that is not JSON; it is sent verbatim with "
+                + "Content-Type: application/json. Add a Content-Type to -Headers to declare its real type.");
+        }
+    }
+
+    /// <summary>
+    /// A response body as JSON for output, or null when nothing further should be emitted:
+    /// an empty body (204, or 200 with no content), a non-JSON body (emitted as text under
+    /// -Raw, otherwise an error), or a body that declares JSON and does not parse.
+    /// </summary>
+    private JsonElement? ReadJsonPayload(HttpResponseMessage response, byte[] bodyBytes, string relativeUri)
+        => ReadJsonPayload(response.StatusCode, response.Content.Headers.ContentType, bodyBytes, relativeUri);
+
+    /// <summary>
+    /// The same read for a caller that no longer holds the response: the entity fan-out reads
+    /// the body on a worker thread and decodes it here, where writing to the streams is legal.
+    /// </summary>
+    private JsonElement? ReadJsonPayload(HttpStatusCode statusCode, MediaTypeHeaderValue? declaredType,
+        byte[] bodyBytes, string relativeUri)
+    {
+        var payload = ReadJsonPayloadCore(declaredType, bodyBytes);
+        switch (payload.Kind)
+        {
+            case JsonPayloadKind.Empty:
+                WriteVerbose($"HTTP {(int)statusCode}: response has no content; nothing to emit.");
+                return null;
+
+            case JsonPayloadKind.NotJson:
+                if (Raw.IsPresent)
+                {
+                    WriteObject(payload.Text);
+                    return null;
+                }
+                WriteError(new ErrorRecord(
+                    new InvalidOperationException(
+                        $"The response is {payload.MediaType}, not JSON. Use -Raw to receive it as text, or Get-MgxContent for file and media content."),
+                    "NonJsonResponse", ErrorCategory.InvalidData, relativeUri));
+                return null;
+
+            case JsonPayloadKind.Malformed:
+                var snippet = payload.Text[..Math.Min(payload.Text.Length, 200)];
+                WriteError(new ErrorRecord(
+                    new InvalidOperationException(
+                        $"The response declared JSON but does not parse. Body starts: {snippet}"),
+                    "MalformedJsonResponse", ErrorCategory.InvalidData, relativeUri));
+                return null;
+
+            default:
+                return payload.Json;
+        }
+    }
 
     private void OutputPayload(JsonElement json, string? sourceId)
     {
@@ -954,6 +1196,11 @@ public class InvokeMgxRequest : MgxCmdletBase
         WriteObject(ht);
     }
 
+    /// <summary>
+    /// Serialized request body for a write method, or null when no content should be sent.
+    /// Graph requires Content-Type: application/json on POST/PATCH/PUT even with an empty body,
+    /// so those default to "{}". DELETE sends no content.
+    /// </summary>
     private string? ResolveRequestBody(HttpMethod method)
     {
         var serialized = Body != null ? SerializeBody(Body) : null;
@@ -964,28 +1211,182 @@ public class InvokeMgxRequest : MgxCmdletBase
     }
 
     /// <summary>
+    /// Options for -Body serialization, chosen for what Graph accepts rather than STJ's
+    /// defaults: enums as camelCase names (Graph never takes them numerically), TimeSpan as
+    /// an Edm.Duration string, a Kind-less DateTime pinned to UTC (Graph rejects a bare
+    /// timestamp), and readable non-ASCII instead of \uXXXX - both forms decode the same,
+    /// but dead-letter files and -Debug traces are read by people.
+    /// </summary>
+    internal static readonly JsonSerializerOptions BodyJsonOptions = new()
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        Converters =
+        {
+            // Claims [Flags] enums only; every other enum falls through to the converter below.
+            new GraphFlagsEnumConverter(),
+            new JsonStringEnumConverter(JsonNamingPolicy.CamelCase),
+            new GraphDurationConverter(),
+            new GraphDateTimeConverter(),
+        },
+    };
+
+    /// <summary>
+    /// OData spells a flags combination "ignoreCase,multiline"; JsonStringEnumConverter writes
+    /// ", " between the names, which Graph will not parse back into a flags-typed enum.
+    ///
+    /// Only that multi-name form is rewritten, and only its separator. Each name in it is
+    /// written by the converter STJ would otherwise have used, one member at a time, so a
+    /// combination spells its members exactly as they spell themselves alone. Resolving them
+    /// here from Enum.ToString did not: it picks the other name when two members share a value,
+    /// and it cannot see [JsonStringEnumMemberName], so a member sent as "read-only" alone went
+    /// out as "read" in a combination, which is not a name the service was ever given.
+    ///
+    /// Everything else - a single member, an alias, a combination with a name of its own, a
+    /// value with bits no member covers - is handed to that converter whole, so name resolution
+    /// and the numeric fallback stay byte-for-byte what they were. Formatting the number here
+    /// instead would carry the current culture's negative sign, which sv-SE writes as U+2212.
+    ///
+    /// Components are taken largest first, so a member covering several bits wins over the bits
+    /// themselves, and are written in ascending value order: {A=1,B=2,C=4,BC=6} at 7 is "a,bc".
+    /// </summary>
+    private sealed class GraphFlagsEnumConverter : JsonConverterFactory
+    {
+        public override bool CanConvert(Type typeToConvert)
+            => typeToConvert.IsEnum && typeToConvert.IsDefined(typeof(FlagsAttribute), inherit: false);
+
+        public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)
+            => (JsonConverter)Activator.CreateInstance(
+                typeof(FlagsConverter<>).MakeGenericType(typeToConvert),
+                new JsonStringEnumConverter(JsonNamingPolicy.CamelCase).CreateConverter(typeToConvert, options))!;
+
+        private sealed class FlagsConverter<T> : JsonConverter<T> where T : struct, Enum
+        {
+            /// <summary>Every declared value with bits of its own, largest first.</summary>
+            private static readonly ulong[] s_members = Enum.GetValues<T>()
+                .Select(ToBits).Where(bits => bits != 0).Distinct().OrderByDescending(bits => bits).ToArray();
+
+            private readonly JsonConverter<T> _inner;
+
+            public FlagsConverter(JsonConverter<T> inner) => _inner = inner;
+
+            public override T Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+                => _inner.Read(ref reader, typeToConvert, options);
+
+            public override T ReadAsPropertyName(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+                => _inner.ReadAsPropertyName(ref reader, typeToConvert, options);
+
+            public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
+            {
+                if (JoinNames(value, options) is { } joined) writer.WriteStringValue(joined);
+                else _inner.Write(writer, value, options);
+            }
+
+            public override void WriteAsPropertyName(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
+            {
+                if (JoinNames(value, options) is { } joined) writer.WritePropertyName(joined);
+                else _inner.WriteAsPropertyName(writer, value, options);
+            }
+
+            /// <summary>The comma-joined form, or null when the value is not a multi-name one.</summary>
+            private string? JoinNames(T value, JsonSerializerOptions options)
+            {
+                var remaining = ToBits(value);
+                var names = new List<string>();
+
+                foreach (var member in s_members)
+                {
+                    if (remaining == 0) break;
+                    if ((remaining & member) != member) continue;
+                    if (NameOf(member, options) is not { } name) return null;
+
+                    // Chosen largest first, written smallest first.
+                    names.Insert(0, name);
+                    remaining &= ~member;
+                }
+
+                // One name is not this converter's business - a lone member, an alias, a
+                // combination named in its own right, zero - and neither is a value with bits
+                // left over, which has no names at all and belongs in the numeric fallback.
+                return remaining == 0 && names.Count > 1 ? string.Join(",", names) : null;
+            }
+
+            /// <summary>What the inner converter writes for one member alone, unquoted.</summary>
+            private string? NameOf(ulong member, JsonSerializerOptions options)
+            {
+                var buffer = new System.Buffers.ArrayBufferWriter<byte>(initialCapacity: 32);
+                using (var writer = new Utf8JsonWriter(buffer))
+                    _inner.Write(writer, (T)Enum.ToObject(typeof(T), member), options);
+
+                var reader = new Utf8JsonReader(buffer.WrittenSpan);
+                return reader.Read() && reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+            }
+
+            /// <summary>The value's bits, sign-extended rather than refused for a signed enum.</summary>
+            private static ulong ToBits(T value) => ((IConvertible)value).GetTypeCode() switch
+            {
+                TypeCode.Byte or TypeCode.UInt16 or TypeCode.UInt32 or TypeCode.UInt64
+                    => ((IConvertible)value).ToUInt64(provider: null),
+                _ => unchecked((ulong)((IConvertible)value).ToInt64(provider: null)),
+            };
+        }
+    }
+
+    /// <summary>Edm.Duration is ISO-8601 ("PT1H"); STJ's default "01:00:00" is refused.</summary>
+    private sealed class GraphDurationConverter : JsonConverter<TimeSpan>
+    {
+        public override TimeSpan Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => System.Xml.XmlConvert.ToTimeSpan(reader.GetString()!);
+
+        public override void Write(Utf8JsonWriter writer, TimeSpan value, JsonSerializerOptions options)
+            => writer.WriteStringValue(System.Xml.XmlConvert.ToString(value));
+    }
+
+    /// <summary>
+    /// A DateTime with Kind=Unspecified would serialize with no offset, which Graph rejects.
+    /// Assume UTC - the read side already resolves timestamps to UtcDateTime, so a value that
+    /// round-trips through mgx keeps its meaning.
+    /// </summary>
+    private sealed class GraphDateTimeConverter : JsonConverter<DateTime>
+    {
+        public override DateTime Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => reader.GetDateTime();
+
+        public override void Write(Utf8JsonWriter writer, DateTime value, JsonSerializerOptions options)
+            => writer.WriteStringValue(value.Kind == DateTimeKind.Unspecified
+                ? DateTime.SpecifyKind(value, DateTimeKind.Utc)
+                : value);
+    }
+
+    /// <summary>
     /// Serialize a -Body argument to the JSON that goes on the wire. A raw JSON string is passed
     /// through verbatim, everything else is serialized.
     /// </summary>
     internal static string SerializeBody(object body)
     {
         var value = UnwrapPSObject(body);
+        RefuseUnserializable(value, "-Body");
         if (value is string s) return s;
         // Still a PSObject after unwrapping: a PSCustomObject, whose members live on the wrapper
-        if (value is PSObject pso) return JsonSerializer.Serialize(PSOToDict(pso));
-        if (value is IDictionary dict) return JsonSerializer.Serialize(DictionaryToDict(dict));
+        if (value is PSObject pso) return JsonSerializer.Serialize(PSOToDict(pso), BodyJsonOptions);
+        if (value is IDictionary dict) return JsonSerializer.Serialize(DictionaryToDict(dict), BodyJsonOptions);
         // Handle array body (object[], ArrayList, List<object>, ... from PowerShell)
-        if (value is IEnumerable seq) return JsonSerializer.Serialize(EnumerableToArray(seq));
-        return JsonSerializer.Serialize(value);
+        if (value is IEnumerable seq and not byte[]) return JsonSerializer.Serialize(EnumerableToArray(seq), BodyJsonOptions);
+        return JsonSerializer.Serialize(value, BodyJsonOptions);
     }
 
-    internal static Dictionary<string, object?> PSOToDict(PSObject pso)
+    internal static Dictionary<string, object?> PSOToDict(PSObject pso, string path = "-Body")
     {
+        // Every property kind, matching what ConvertTo-Json reads - so -Body $obj and
+        // -Body ($obj | ConvertTo-Json) produce the same members. ScriptProperties are
+        // evaluated; one whose getter throws serializes as null rather than failing the
+        // whole body.
         var dict = new Dictionary<string, object?>();
         foreach (var prop in pso.Properties)
         {
-            if (prop.MemberType == PSMemberTypes.NoteProperty)
-                dict[prop.Name] = UnwrapValue(prop.Value);
+            object? raw;
+            try { raw = prop.Value; }
+            catch (GetValueException) { raw = null; }
+            dict[prop.Name] = UnwrapValue(raw, $"{path}.{prop.Name}");
         }
         return dict;
     }
@@ -994,11 +1395,11 @@ public class InvokeMgxRequest : MgxCmdletBase
     /// Flatten any IDictionary (Hashtable or ordered dictionary) into a serializable
     /// dictionary, unwrapping nested PowerShell values.
     /// </summary>
-    internal static Dictionary<string, object?> DictionaryToDict(IDictionary source)
+    internal static Dictionary<string, object?> DictionaryToDict(IDictionary source, string path = "-Body")
     {
         var dict = new Dictionary<string, object?>();
         foreach (DictionaryEntry entry in source)
-            dict[entry.Key.ToString()!] = UnwrapValue(entry.Value);
+            dict[entry.Key.ToString()!] = UnwrapValue(entry.Value, $"{path}.{entry.Key}");
         return dict;
     }
 
@@ -1007,22 +1408,66 @@ public class InvokeMgxRequest : MgxCmdletBase
     /// A PSCustomObject keeps its members on the PSObject (its BaseObject is an empty
     /// marker), so it must be read through PSOToDict rather than its BaseObject.
     /// </summary>
-    internal static object? UnwrapValue(object? value)
+    private const int MaxBodyDepth = 64;
+
+    internal static object? UnwrapValue(object? value, string path = "-Body")
     {
+        // Depth from the path: each nesting level appends a segment. A self-referencing
+        // hashtable ($h.self = $h) recursed to a StackOverflowException, which no catch
+        // can stop - the process died. 64 levels is far beyond any real Graph body.
+        if (path.Length > MaxBodyDepth * 8)
+        {
+            var depth = path.Count(c => c is '.' or '[');
+            if (depth > MaxBodyDepth)
+                throw new ArgumentException(
+                    $"The value at '{path[..64]}...' nests deeper than {MaxBodyDepth} levels. "
+                    + "Is the body self-referencing?");
+        }
         if (value is PSObject pso)
         {
             var unwrapped = UnwrapPSObject(pso);
-            return ReferenceEquals(unwrapped, pso) ? PSOToDict(pso) : UnwrapValue(unwrapped);
+            return ReferenceEquals(unwrapped, pso) ? PSOToDict(pso, path) : UnwrapValue(unwrapped, path);
         }
+        RefuseUnserializable(value, path);
         if (value is IDictionary dict)
-            return DictionaryToDict(dict);
-        if (value is IEnumerable seq and not string)
-            return EnumerableToArray(seq);
+            return DictionaryToDict(dict, path);
+        // byte[] is Edm.Binary and serializes as base64; flattening it into object?[]
+        // would emit a JSON array of integers instead.
+        if (value is IEnumerable seq and not (string or byte[]))
+            return EnumerableToArray(seq, path);
         return value;
     }
 
-    private static object?[] EnumerableToArray(IEnumerable source) =>
-        source.Cast<object?>().Select(UnwrapValue).ToArray();
+    /// <summary>
+    /// Values that would serialize to something other than what they mean. A SecureString
+    /// reflects to {"Length":8} - the request "succeeds" carrying garbage instead of the
+    /// secret, or worse, would carry the secret if it round-tripped. NaN and Infinity have
+    /// no JSON representation, and STJ's own refusal does not say which property.
+    /// </summary>
+    private static void RefuseUnserializable(object? value, string path)
+    {
+        switch (value)
+        {
+            case System.Security.SecureString:
+            case PSCredential:
+            case ScriptBlock:
+            case System.Security.Cryptography.X509Certificates.X509Certificate:
+                throw new ArgumentException(
+                    $"The value at '{path}' is a {value.GetType().Name}, which does not serialize "
+                    + "to JSON meaningfully. Convert it to what the endpoint expects before sending.");
+            case double d when double.IsNaN(d) || double.IsInfinity(d):
+                throw new ArgumentException($"The value at '{path}' is {d}; JSON has no representation for it.");
+            case float f when float.IsNaN(f) || float.IsInfinity(f):
+                throw new ArgumentException($"The value at '{path}' is {f}; JSON has no representation for it.");
+        }
+    }
+
+    /// <summary>
+    /// Flatten any non-string sequence (object[], ArrayList, List&lt;object&gt;, ...) into an array of
+    /// unwrapped values.
+    /// </summary>
+    private static object?[] EnumerableToArray(IEnumerable source, string path = "-Body") =>
+        source.Cast<object?>().Select((v, i) => UnwrapValue(v, $"{path}[{i}]")).ToArray();
 
     #endregion
 

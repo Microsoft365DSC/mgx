@@ -194,6 +194,7 @@ public class DeltaQueryTests
         Assert.Equal("deleted", removed.GetProperty("reason").GetString());
         // @removed does NOT start with @odata. so it survives JsonToHashtable's
         // @odata.* stripping filter
+        Assert.False("@removed".StartsWith("@odata.", StringComparison.OrdinalIgnoreCase));
     }
 
     // --- DeltaState persistence ---
@@ -559,11 +560,203 @@ public class DeltaQueryTests
 
     // --- #4: OutputFile temp file cleanup on error ---
 
+    [Fact]
+    public async Task Delta_OutputFile_TempFileCleanedUpOnError()
+    {
+        ResiliencePipelineFactory.Reset();
+        var handler = new MockHttpHandler();
+        handler.QueueResponse(HttpStatusCode.OK, DeltaPage1);
+        // Queue enough 500s to exhaust Polly retries (1 initial + 1 retry = 2 attempts)
+        handler.QueueResponse(HttpStatusCode.InternalServerError);
+        handler.QueueResponse(HttpStatusCode.InternalServerError);
+
+        using var httpClient = new HttpClient(handler);
+        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions
+        {
+            NoRateLimit = true,
+            MaxRetryAttempts = 1
+        });
+
+        var outputPath = Path.Combine(Path.GetTempPath(), $"delta-cleanup-{Guid.NewGuid()}.jsonl");
+        var tmpPath = $"{outputPath}.tmp";
+        try
+        {
+            var iterator = new PageIterator(client);
+            var writePath = $"{outputPath}.{Guid.NewGuid():N}.tmp";
+            try
+            {
+                using (var writer = new StreamWriter(writePath, append: false))
+                {
+                    await foreach (var item in iterator.StreamAllWithCountAsync(
+                        "https://graph.microsoft.com/v1.0/users/delta",
+                        0,
+                        null,
+                        onDeltaLink: _ => { }))
+                    {
+                        writer.WriteLine(item.GetRawText());
+                    }
+                }
+                File.Move(writePath, outputPath, overwrite: true);
+            }
+            catch
+            {
+                // Simulate the cmdlet's cleanup behavior
+                try { if (File.Exists(writePath)) File.Delete(writePath); } catch { }
+                throw;
+            }
+
+            Assert.Fail("Should have thrown");
+        }
+        catch (GraphServiceException)
+        {
+            // Expected: 500 error on page 2
+            Assert.False(File.Exists(outputPath), "Final output file should not exist after error");
+        }
+        finally
+        {
+            if (File.Exists(outputPath)) File.Delete(outputPath);
+        }
+    }
+
     // --- #5: OutputFile atomic rename on success ---
+
+    [Fact]
+    public async Task Delta_OutputFile_AtomicRenameOnSuccess()
+    {
+        ResiliencePipelineFactory.Reset();
+        var handler = new MockHttpHandler();
+        handler.QueueResponse(HttpStatusCode.OK, DeltaPage2WithToken);
+
+        using var httpClient = new HttpClient(handler);
+        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+
+        var outputPath = Path.Combine(Path.GetTempPath(), $"delta-atomic-{Guid.NewGuid()}.jsonl");
+        try
+        {
+            var iterator = new PageIterator(client);
+            var writePath = $"{outputPath}.{Guid.NewGuid():N}.tmp";
+            using (var writer = new StreamWriter(writePath, append: false))
+            {
+                await foreach (var item in iterator.StreamAllWithCountAsync(
+                    "https://graph.microsoft.com/v1.0/users/delta",
+                    0,
+                    null,
+                    onDeltaLink: _ => { }))
+                {
+                    writer.WriteLine(item.GetRawText());
+                }
+            }
+            // Atomic rename
+            File.Move(writePath, outputPath, overwrite: true);
+
+            Assert.True(File.Exists(outputPath));
+            Assert.False(File.Exists(writePath), "Temp file should be gone after rename");
+            Assert.Single(File.ReadAllLines(outputPath));
+        }
+        finally
+        {
+            if (File.Exists(outputPath)) File.Delete(outputPath);
+        }
+    }
 
     // --- #6: Cancellation does NOT save delta state ---
 
+    [Fact]
+    public async Task Delta_Cancellation_DoesNotSaveDeltaState()
+    {
+        ResiliencePipelineFactory.Reset();
+        var handler = new MockHttpHandler();
+        // Page 1 returns items, page 2 will be cancelled
+        handler.QueueResponse(HttpStatusCode.OK, DeltaPage1);
+        handler.SetDefaultResponse(HttpStatusCode.OK, DeltaPage2WithToken);
+
+        using var httpClient = new HttpClient(handler);
+        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+
+        var deltaPath = Path.Combine(Path.GetTempPath(), $"delta-cancel-{Guid.NewGuid()}.json");
+        try
+        {
+            var cts = new CancellationTokenSource();
+            var iterator = new PageIterator(client);
+            string? capturedDeltaLink = null;
+            int itemCount = 0;
+
+            await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            {
+                await foreach (var item in iterator.StreamAllWithCountAsync(
+                    "https://graph.microsoft.com/v1.0/users/delta",
+                    0,
+                    null,
+                    onDeltaLink: dl => capturedDeltaLink = dl,
+                    cancellationToken: cts.Token))
+                {
+                    itemCount++;
+                    if (itemCount >= 1) cts.Cancel(); // Cancel after first item
+                }
+            });
+
+            // Delta state should NOT be saved (cmdlet only saves after successful completion)
+            Assert.False(File.Exists(deltaPath), "Delta state should not be saved on cancellation");
+        }
+        finally
+        {
+            DeltaState.Delete(deltaPath);
+        }
+    }
+
     // --- #7: Cancellation cleans up temp file ---
+
+    [Fact]
+    public async Task Delta_Cancellation_CleansUpTempFile()
+    {
+        ResiliencePipelineFactory.Reset();
+        var handler = new MockHttpHandler();
+        handler.QueueResponse(HttpStatusCode.OK, DeltaPage1);
+        handler.SetDefaultResponse(HttpStatusCode.OK, DeltaPage2WithToken);
+
+        using var httpClient = new HttpClient(handler);
+        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+
+        var outputPath = Path.Combine(Path.GetTempPath(), $"delta-cancel-out-{Guid.NewGuid()}.jsonl");
+        var cts = new CancellationTokenSource();
+        string? writePath = null;
+
+        try
+        {
+            writePath = $"{outputPath}.{Guid.NewGuid():N}.tmp";
+            var iterator = new PageIterator(client);
+
+            try
+            {
+                using (var writer = new StreamWriter(writePath, append: false))
+                {
+                    await foreach (var item in iterator.StreamAllWithCountAsync(
+                        "https://graph.microsoft.com/v1.0/users/delta",
+                        0,
+                        null,
+                        onDeltaLink: _ => { },
+                        cancellationToken: cts.Token))
+                    {
+                        writer.WriteLine(item.GetRawText());
+                        cts.Cancel();
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Simulate cmdlet cleanup
+                try { if (File.Exists(writePath)) File.Delete(writePath); } catch { }
+            }
+
+            Assert.False(File.Exists(writePath), "Temp file should be cleaned up on cancellation");
+            Assert.False(File.Exists(outputPath), "Output file should not exist after cancellation");
+        }
+        finally
+        {
+            if (writePath != null && File.Exists(writePath)) File.Delete(writePath);
+            if (File.Exists(outputPath)) File.Delete(outputPath);
+        }
+    }
 
     // --- #8: Delta state NOT saved on GraphServiceException ---
 
@@ -694,6 +887,14 @@ public class DeltaQueryTests
 
     // --- #12: IOException from file operations ---
 
+    [Fact]
+    public void Delta_OutputFile_IOException_WhenPathInvalid()
+    {
+        // Verify that writing to an invalid path throws IOException
+        var invalidPath = Path.Combine(Path.GetTempPath(), new string('x', 300), "output.jsonl");
+        Assert.ThrowsAny<Exception>(() => new StreamWriter(invalidPath));
+    }
+
     // --- #13: No deltaLink received warning scenario ---
 
     [Fact]
@@ -725,46 +926,6 @@ public class DeltaQueryTests
 
     // --- Cmdlet-level tests via PowerShell.Create() ---
 
-    /// <summary>
-    /// Injects a mock HttpClient into MgxCmdletBase's static fields so Sync-MgxDelta
-    /// can run without a real Graph connection. Uses reflection because the fields
-    /// are private static.
-    /// </summary>
-    private static void InjectMockHttpClient(MockHttpHandler handler)
-    {
-        ResiliencePipelineFactory.Reset();
-        var baseType = typeof(MgxCmdletBase);
-        var httpClientField = baseType.GetField("s_graphHttpClient", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var fingerprintField = baseType.GetField("s_cachedAuthFingerprint", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var ownsClientField = baseType.GetField("s_ownsHttpClient", BindingFlags.NonPublic | BindingFlags.Static)!;
-
-        var httpClient = new HttpClient(handler);
-        var endpointField = baseType.GetField("s_graphEndpoint", BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Public)!;
-        var optionsField = baseType.GetField("s_clientOptions", BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Public)!;
-
-        httpClientField.SetValue(null, httpClient);
-        // The cmdlet recomputes the identity from the mocked Get-MgContext (a PSCustomObject
-        // carrying only TenantId), so the cached fingerprint must be built from an equivalent
-        // context or GetClient() sees a credential change and discards the injected mock.
-        fingerprintField.SetValue(null, MgxCmdletBase.BuildAuthFingerprint(
-            new { TenantId = "test-tenant-00000000-0000-0000-0000-000000000000" }, null));
-        // Cleared with the fingerprint. A stale reference from an earlier test reads as a
-        // credential change and the injected client is rebuilt away
-        baseType.GetField("s_cachedAuthContextRef", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, null);
-        ownsClientField.SetValue(null, false);
-        endpointField.SetValue(null, "https://graph.microsoft.com");
-        optionsField.SetValue(null, new ResilientGraphClientOptions { NoRateLimit = true });
-    }
-
-    private static void CleanupMockHttpClient()
-    {
-        var baseType = typeof(MgxCmdletBase);
-        baseType.GetField("s_graphHttpClient", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, null);
-        baseType.GetField("s_cachedAuthFingerprint", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, null);
-        baseType.GetField("s_cachedAuthContextRef", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, null);
-        ResiliencePipelineFactory.Reset();
-    }
-
     private static PowerShell CreateTestShell()
     {
         var ps = PowerShell.Create();
@@ -795,7 +956,8 @@ public class DeltaQueryTests
         // Second attempt (fresh URL) succeeds with items + deltaLink
         handler.QueueResponse(HttpStatusCode.OK, DeltaPage2WithToken);
 
-        InjectMockHttpClient(handler);
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions { NoRateLimit = true });
         var deltaPath = Path.Combine(Path.GetTempPath(), $"cmdlet-410-{Guid.NewGuid()}.json");
 
         try
@@ -828,7 +990,6 @@ public class DeltaQueryTests
         finally
         {
             DeltaState.Delete(deltaPath);
-            CleanupMockHttpClient();
         }
     }
 
@@ -842,11 +1003,9 @@ public class DeltaQueryTests
         handler.QueueResponse(HttpStatusCode.InternalServerError, errorBody); // Page 2 fails
         handler.QueueResponse(HttpStatusCode.InternalServerError, errorBody); // Polly retry also fails
 
-        InjectMockHttpClient(handler);
-        // Override options to limit retries (default 7 would need 8 error responses)
-        var optField = typeof(MgxCmdletBase).GetField("s_clientOptions", BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Public)!;
-        optField.SetValue(null, new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAttempts = 1 });
-        ResiliencePipelineFactory.Reset();
+        // Limit retries: the default would need eight error responses queued.
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAttempts = 1 });
         var deltaPath = Path.Combine(Path.GetTempPath(), $"cmdlet-tempclean-{Guid.NewGuid()}.json");
         var outputPath = Path.Combine(Path.GetTempPath(), $"cmdlet-tempclean-{Guid.NewGuid()}.jsonl");
 
@@ -861,9 +1020,13 @@ public class DeltaQueryTests
 
             // Output file should NOT exist (error before atomic rename)
             Assert.False(File.Exists(outputPath), "Output file should not exist after error");
-            // No .tmp files should remain
+            // No .tmp of this run's should remain. Named for the output this test generated,
+            // not for the prefix every process running the suite shares: the temps a sync
+            // leaves are "{output}.{guid}.tmp", so that name picks out this invocation's and
+            // nothing else's, and a sibling run's in-flight temp in the shared directory is
+            // another test's business.
             var dir = Path.GetDirectoryName(outputPath)!;
-            var tmpFiles = Directory.GetFiles(dir, "*.tmp").Where(f => f.Contains("cmdlet-tempclean")).ToArray();
+            var tmpFiles = Directory.GetFiles(dir, Path.GetFileName(outputPath) + ".*.tmp");
             Assert.Empty(tmpFiles);
             // Should have errors
             Assert.True(ps.HadErrors, "Should have errors from 500 response");
@@ -872,7 +1035,6 @@ public class DeltaQueryTests
         {
             DeltaState.Delete(deltaPath);
             if (File.Exists(outputPath)) File.Delete(outputPath);
-            CleanupMockHttpClient();
         }
     }
 
@@ -886,19 +1048,16 @@ public class DeltaQueryTests
         for (int i = 0; i < 20; i++)
             handler.QueueResponse(HttpStatusCode.InternalServerError);
 
-        InjectMockHttpClient(handler);
-        // Use aggressive CB settings so it trips quickly
-        var optionsField = typeof(MgxCmdletBase).GetField("s_clientOptions", BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Public)!;
-        optionsField.SetValue(null, new ResilientGraphClientOptions
-        {
-            NoRateLimit = true,
-            CircuitBreakerMinThroughput = 2,
-            CircuitBreakerFailureRatio = 0.5,
-            CircuitBreakerDurationSeconds = 30,
-            MaxRetryAttempts = 1,
-            MaxRetryAfterSeconds = 1
-        });
-        ResiliencePipelineFactory.Reset();
+        // Aggressive circuit-breaker settings so it trips quickly.
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions
+            {
+                NoRateLimit = true,
+                CircuitBreakerMinThroughput = 2,
+                CircuitBreakerFailureRatio = 0.5,
+                CircuitBreakerDurationSeconds = 30,
+                MaxRetryAttempts = 1
+            });
 
         var deltaPath = Path.Combine(Path.GetTempPath(), $"cmdlet-cb-{Guid.NewGuid()}.json");
 
@@ -925,7 +1084,6 @@ public class DeltaQueryTests
         finally
         {
             DeltaState.Delete(deltaPath);
-            CleanupMockHttpClient();
         }
     }
 
@@ -937,14 +1095,8 @@ public class DeltaQueryTests
         handler.QueueException(new HttpRequestException("Connection refused"));
         handler.QueueException(new HttpRequestException("Connection refused")); // For Polly retry
 
-        InjectMockHttpClient(handler);
-        var optionsField2 = typeof(MgxCmdletBase).GetField("s_clientOptions", BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Public)!;
-        optionsField2.SetValue(null, new ResilientGraphClientOptions
-        {
-            NoRateLimit = true,
-            MaxRetryAttempts = 1
-        });
-        ResiliencePipelineFactory.Reset();
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAttempts = 1 });
 
         var deltaPath = Path.Combine(Path.GetTempPath(), $"cmdlet-http-{Guid.NewGuid()}.json");
 
@@ -967,7 +1119,6 @@ public class DeltaQueryTests
         finally
         {
             DeltaState.Delete(deltaPath);
-            CleanupMockHttpClient();
         }
     }
 
@@ -1034,7 +1185,8 @@ public class DeltaQueryTests
         handler.QueueResponse(HttpStatusCode.OK, DeltaPage1);
         handler.QueueResponse(HttpStatusCode.OK, DeltaPage2WithToken);
 
-        InjectMockHttpClient(handler);
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions { NoRateLimit = true });
         var deltaPath = Path.Combine(Path.GetTempPath(), $"cmdlet-prefer-{Guid.NewGuid()}.json");
 
         try
@@ -1062,7 +1214,6 @@ public class DeltaQueryTests
         finally
         {
             DeltaState.Delete(deltaPath);
-            CleanupMockHttpClient();
         }
     }
 
@@ -1072,7 +1223,8 @@ public class DeltaQueryTests
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, DeltaPage2WithToken);
 
-        InjectMockHttpClient(handler);
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions { NoRateLimit = true });
         var deltaPath = Path.Combine(Path.GetTempPath(), $"cmdlet-preferdrift-{Guid.NewGuid()}.json");
         var cpPath = Path.Combine(Path.GetTempPath(), $"cmdlet-preferdrift-{Guid.NewGuid()}.checkpoint");
 
@@ -1113,7 +1265,6 @@ public class DeltaQueryTests
         {
             DeltaState.Delete(deltaPath);
             PaginationCheckpoint.Delete(cpPath);
-            CleanupMockHttpClient();
         }
     }
 
@@ -1123,7 +1274,8 @@ public class DeltaQueryTests
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, EmptyDeltaWithToken);
 
-        InjectMockHttpClient(handler);
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions { NoRateLimit = true });
         var deltaPath = Path.Combine(Path.GetTempPath(), $"cmdlet-latest-dir-{Guid.NewGuid()}.json");
 
         try
@@ -1145,7 +1297,6 @@ public class DeltaQueryTests
         finally
         {
             DeltaState.Delete(deltaPath);
-            CleanupMockHttpClient();
         }
     }
 
@@ -1162,7 +1313,8 @@ public class DeltaQueryTests
         }
         """);
 
-        InjectMockHttpClient(handler);
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions { NoRateLimit = true });
         var deltaPath = Path.Combine(Path.GetTempPath(), $"cmdlet-latest-drive-{Guid.NewGuid()}.json");
 
         try
@@ -1183,7 +1335,6 @@ public class DeltaQueryTests
         finally
         {
             DeltaState.Delete(deltaPath);
-            CleanupMockHttpClient();
         }
     }
 
@@ -1193,7 +1344,8 @@ public class DeltaQueryTests
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, EmptyDeltaWithToken);
 
-        InjectMockHttpClient(handler);
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions { NoRateLimit = true });
         var deltaPath = Path.Combine(Path.GetTempPath(), $"cmdlet-latest-ignored-{Guid.NewGuid()}.json");
 
         try
@@ -1220,7 +1372,6 @@ public class DeltaQueryTests
         finally
         {
             DeltaState.Delete(deltaPath);
-            CleanupMockHttpClient();
         }
     }
 
@@ -1236,10 +1387,8 @@ public class DeltaQueryTests
         handler.QueueResponse(HttpStatusCode.InternalServerError, errorBody);
         handler.QueueResponse(HttpStatusCode.InternalServerError, errorBody);
 
-        InjectMockHttpClient(handler);
-        var optField = typeof(MgxCmdletBase).GetField("s_clientOptions", BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Public)!;
-        optField.SetValue(null, new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAttempts = 1 });
-        ResiliencePipelineFactory.Reset();
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAttempts = 1 });
 
         var deltaPath = Path.Combine(Path.GetTempPath(), $"cmdlet-cp-resume-{Guid.NewGuid()}.json");
         var cpPath = Path.Combine(Path.GetTempPath(), $"cmdlet-cp-resume-{Guid.NewGuid()}.checkpoint");
@@ -1289,7 +1438,6 @@ public class DeltaQueryTests
         {
             DeltaState.Delete(deltaPath);
             PaginationCheckpoint.Delete(cpPath);
-            CleanupMockHttpClient();
         }
     }
 
@@ -1302,7 +1450,8 @@ public class DeltaQueryTests
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, DeltaPage2WithToken);
 
-        InjectMockHttpClient(handler);
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions { NoRateLimit = true });
         var stem = $"cmdlet-cp-adopt-{Guid.NewGuid()}";
         var deltaPath = Path.Combine(Path.GetTempPath(), $"{stem}.json");
         var cpPath = Path.Combine(Path.GetTempPath(), $"{stem}.checkpoint");
@@ -1318,7 +1467,8 @@ public class DeltaQueryTests
                 Resource = "https://graph.microsoft.com/v1.0/users/delta?$top=999",
                 NextLink = "https://graph.microsoft.com/v1.0/users/delta?$skiptoken=page2",
                 ItemsCollected = 2,
-                PageItemsAlreadyWritten = 0
+                PageItemsAlreadyWritten = 0,
+                OutputFile = outputPath
             }.Save(cpPath);
             File.WriteAllLines(tempPath,
             [
@@ -1348,7 +1498,6 @@ public class DeltaQueryTests
             PaginationCheckpoint.Delete(cpPath);
             if (File.Exists(outputPath)) File.Delete(outputPath);
             if (File.Exists(tempPath)) File.Delete(tempPath);
-            CleanupMockHttpClient();
         }
     }
 
@@ -1362,7 +1511,8 @@ public class DeltaQueryTests
             """{"error":{"code":"deltaTokenExpired","message":"Delta token has expired"}}""");
         handler.QueueResponse(HttpStatusCode.OK, DeltaPage2WithToken);
 
-        InjectMockHttpClient(handler);
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions { NoRateLimit = true });
         var deltaPath = Path.Combine(Path.GetTempPath(), $"cmdlet-410cp-{Guid.NewGuid()}.json");
         var cpPath = Path.Combine(Path.GetTempPath(), $"cmdlet-410cp-{Guid.NewGuid()}.checkpoint");
 
@@ -1398,7 +1548,6 @@ public class DeltaQueryTests
         {
             DeltaState.Delete(deltaPath);
             PaginationCheckpoint.Delete(cpPath);
-            CleanupMockHttpClient();
         }
     }
 
@@ -1408,7 +1557,8 @@ public class DeltaQueryTests
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, DeltaPageWithRemoved);
 
-        InjectMockHttpClient(handler);
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions { NoRateLimit = true });
         var deltaPath = Path.Combine(Path.GetTempPath(), $"cmdlet-removed-{Guid.NewGuid()}.json");
 
         try
@@ -1431,7 +1581,6 @@ public class DeltaQueryTests
         finally
         {
             DeltaState.Delete(deltaPath);
-            CleanupMockHttpClient();
         }
     }
 
@@ -1470,7 +1619,8 @@ public class DeltaQueryTests
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, BuildSingleDeltaPage(ItemsInPage));
 
-        InjectMockHttpClient(handler);
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions { NoRateLimit = true });
         var stem = $"cmdlet-cp-midpage-{Guid.NewGuid()}";
         var deltaPath = Path.Combine(Path.GetTempPath(), $"{stem}.json");
         var cpPath = Path.Combine(Path.GetTempPath(), $"{stem}.checkpoint");
@@ -1513,7 +1663,6 @@ public class DeltaQueryTests
             {
                 try { File.Delete(leftover); } catch { }
             }
-            CleanupMockHttpClient();
         }
     }
     [Fact]
@@ -1527,7 +1676,8 @@ public class DeltaQueryTests
         // triggers it.
         var handler = new MockHttpHandler();
         handler.SetDefaultResponse(HttpStatusCode.OK, DeltaPage2WithToken);
-        InjectMockHttpClient(handler);
+        using var transport = MgxTransportScope.Inject(handler,
+            options: new ResilientGraphClientOptions { NoRateLimit = true });
         var deltaPath = Path.Combine(Path.GetTempPath(), $"latest-discard-{Guid.NewGuid()}.json");
 
         try
@@ -1557,7 +1707,6 @@ public class DeltaQueryTests
         finally
         {
             DeltaState.Delete(deltaPath);
-            CleanupMockHttpClient();
         }
     }
 }

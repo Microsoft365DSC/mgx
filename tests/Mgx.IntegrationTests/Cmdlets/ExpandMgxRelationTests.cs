@@ -1,6 +1,7 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Management.Automation;
 using System.Net;
+using Mgx.Cmdlets.Base;
 using System.Text.Json;
 using Mgx.Cmdlets.Cmdlets.Expand;
 using Mgx.IntegrationTests.Fakes;
@@ -81,10 +82,9 @@ public class ExpandMgxRelationTests
     [Fact]
     public void GetStatusCodeFromException_ReturnsGraphServiceExceptionStatus()
     {
-        var cmdlet = new ExpandMgxRelation();
         var ex = new Mgx.Engine.Models.GraphServiceException(HttpStatusCode.NotFound, "Not found");
 
-        var status = InvokeMethod<HttpStatusCode?>(cmdlet, "GetStatusCodeFromException", ex);
+        var status = MgxErrorPresentation.TryGetStatus(ex);
 
         Assert.Equal(HttpStatusCode.NotFound, status);
     }
@@ -92,10 +92,9 @@ public class ExpandMgxRelationTests
     [Fact]
     public void GetStatusCodeFromException_ReturnsHttpRequestExceptionStatus()
     {
-        var cmdlet = new ExpandMgxRelation();
         var ex = new HttpRequestException("Error", null, HttpStatusCode.ServiceUnavailable);
 
-        var status = InvokeMethod<HttpStatusCode?>(cmdlet, "GetStatusCodeFromException", ex);
+        var status = MgxErrorPresentation.TryGetStatus(ex);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, status);
     }
@@ -113,6 +112,6 @@ public class ExpandMgxRelationTests
         Assert.Equal(ErrorCategory.InvalidArgument, category);
 
         category = InvokeMethod<ErrorCategory>(typeof(Mgx.Cmdlets.Base.MgxCmdletBase), "MapStatusToCategory", HttpStatusCode.ServiceUnavailable);
-        Assert.Equal(ErrorCategory.NotSpecified, category);
+        Assert.Equal(ErrorCategory.ResourceUnavailable, category);
     }
 }

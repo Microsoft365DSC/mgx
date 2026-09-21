@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text;
 using System.Text.Json;
 using Mgx.Engine.Http;
@@ -214,7 +214,11 @@ public class GraphBatchClientTests
 
         var ex = Assert.IsType<GraphServiceException>(result.ChunkFailure);
         Assert.Equal(HttpStatusCode.Forbidden, ex.StatusCode);
-        Assert.Single(result.NotSent);
+
+        // NotSent holds the operations after the failed chunk. This chunk's own operation went
+        // out and carries the failure's own status, so it is not one of them.
+        Assert.Empty(result.NotSent);
+        Assert.Equal((int)HttpStatusCode.Forbidden, result.Results[0].Response.Status);
     }
 
     [Fact]

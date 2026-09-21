@@ -1,6 +1,6 @@
 @{
     RootModule        = 'M365DSC.mgx.psm1'
-    ModuleVersion     = '2.1.2'
+    ModuleVersion     = '2.1.6'
     GUID              = 'f978315f-75c0-48f5-b929-ca7a7757d1d2'
     Author            = 'Thomas Maillo Grome, Fabien Tschanz'
     CompanyName       = 'Mgx'

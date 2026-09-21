@@ -1,5 +1,6 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Management.Automation;
+using System.Threading;
 using System.Management.Automation.Runspaces;
 using System.Reflection;
 using Mgx.Cmdlets.Base;
@@ -73,7 +74,9 @@ public sealed class MgxTestHost : IDisposable
         MgxCmdletBase.SetClientOptions(options ?? FastOptions);
         MgxCmdletBase.s_graphEndpoint = graphEndpoint;
         // Cleared for the tests that drive the real client build through a stubbed Graph SDK
-        MgxCmdletBase.s_testTransportFactory = useTestTransport ? () => _httpClient : null;
+        MgxCmdletBase.s_testTransportOwned = useTestTransport;
+        MgxCmdletBase.s_testTransport = useTestTransport ? _httpClient : null;
+        Interlocked.Increment(ref MgxCmdletBase.s_testTransportEpoch);
     }
 
     public MgxResult Run(Action<PowerShell> build)
@@ -108,7 +111,9 @@ public sealed class MgxTestHost : IDisposable
 
     public void Dispose()
     {
-        MgxCmdletBase.s_testTransportFactory = null;
+        MgxCmdletBase.s_testTransportOwned = false;
+        MgxCmdletBase.s_testTransport = null;
+        Interlocked.Increment(ref MgxCmdletBase.s_testTransportEpoch);
         MgxCmdletBase.s_graphEndpoint = "https://graph.microsoft.com";
         MgxCmdletBase.SetClientOptions(ResilientGraphClientOptions.Default);
         ResiliencePipelineFactory.Reset();

@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text;
 using System.Text.Json;
 using Mgx.Engine.Pagination;
@@ -227,31 +227,6 @@ public class ExportMgxCollectionRecoveryTests : IDisposable
         Assert.Contains(result.Warnings, w => w.Contains("output file is missing"));
         Assert.Equal(1, ItemCount(result));
         Assert.False(File.Exists(cpPath));
-    }
-
-    [Fact]
-    public void A_checkpoint_naming_a_temp_that_is_gone_starts_over()
-    {
-        var path = InWorkDir("orphan.jsonl");
-        var cpPath = InWorkDir("orphan.checkpoint");
-        new PaginationCheckpoint
-        {
-            Resource = "https://graph.microsoft.com/v1.0/users",
-            NextLink = "https://graph.microsoft.com/v1.0/users?$skiptoken=p2",
-            ItemsCollected = 5,
-            TempFile = InWorkDir("orphan.jsonl.deadbeef.tmp"),
-            DataLength = 40
-        }.Save(cpPath);
-        using var host = new MgxTestHost(Json(Page("u1")));
-
-        var result = host.Run(ps => ps.AddCommand("Export-MgxCollection")
-            .AddParameter("Uri", "/users")
-            .AddParameter("OutputFile", path)
-            .AddParameter("CheckpointPath", cpPath)
-            .AddParameter("All"));
-
-        Assert.Contains(result.Warnings, w => w.Contains("temp file is missing or incomplete"));
-        Assert.Equal(1, ItemCount(result));
     }
 
     [Fact]

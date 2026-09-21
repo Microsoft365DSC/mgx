@@ -1,7 +1,7 @@
 ---
 external help file: Mgx.Cmdlets.dll-Help.xml
 Module Name: Mgx
-online version: https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Invoke-MgxBatchRequest.md
+online version: https://github.com/gromedev/mgx/blob/main/module/help/Invoke-MgxBatchRequest.md
 schema: 2.0.0
 ---
 
@@ -14,8 +14,8 @@ Bundle multiple Graph API requests into /$batch calls.
 
 ```
 Invoke-MgxBatchRequest [-Uri] <Object[]> [-Method <String>] [-Body <Object>] [-ConsistencyLevel <String>]
- [-Headers <Hashtable>] [-ThrottlePriority <String>] [-ApiVersion <String>] [-ProgressAction <ActionPreference>]
- [-WhatIf] [-Confirm] [<CommonParameters>]
+ [-Headers <Hashtable>] [-ThrottlePriority <String>] [-ApiVersion <String>] [-DeadLetterPath <String>]
+ [-ProgressAction <ActionPreference>] [-WhatIf] [-Confirm] [<CommonParameters>]
 ```
 
 ## DESCRIPTION
@@ -25,7 +25,7 @@ Supports GET, POST, PATCH, PUT, and DELETE methods with optional request bodies.
 
 Source: [Combine multiple HTTP requests using JSON batching](https://learn.microsoft.com/en-us/graph/json-batching)
 
-Pipeline input can be string URLs (for GET, or combined with -Method/-Body for the same operation on all) or hashtables or PSCustomObjects with Url, Method, and Body members for per-item control. An optional Id member is echoed back on the matching result, so you can correlate on your own key instead of on URL or position.
+Pipeline input can be string URLs (for GET, or combined with -Method/-Body for the same operation on all) or hashtables or PSCustomObjects with Url, Method, and Body members for per-item control.
 
 Failed items are surfaced as PowerShell ErrorRecords. Use -ErrorAction Stop to halt on the first failure, or inspect $Error after completion.
 
@@ -110,9 +110,12 @@ Batches search queries that require the ConsistencyLevel header.
 1..1000 | ForEach-Object {
     [PSCustomObject]@{ Url = "/users"; Method = "POST"; Body = @{ displayName = "User-$_"; mailNickname = "user$_"; userPrincipalName = "user$_@contoso.com"; passwordProfile = @{ password = "P@ss$(Get-Random -Minimum 10000)!" } } }
 } | Invoke-MgxBatchRequest -DeadLetterPath ./failed-users.jsonl
+
+# The redacted password field, as failed-users.jsonl holds it:
+# "passwordProfile":"***REDACTED***"
 ```
 
-Creates 1000 users via batch. Any failures (status >= 400) are appended to the JSONL dead-letter file with Url, Method, Body (passwords redacted), Status, and Error. Sensitive fields like passwordProfile are automatically replaced with ***REDACTED***.
+Creates 1000 users via batch. Anything the server answered with a status >= 400 is appended to the JSONL dead-letter file, and so is anything that was never sent, which carries status 0; each line holds Timestamp, Url, Method, Status and Body, then Error where the item's own response carried an error message - a never-sent item has no response to read one from, and neither does an item of a refused chunk the server did not answer, so those lines end at Body. The Body is redacted by field name, by field value and by URL: a field whose name carries password, secret, credential, key, token, assertion, passphrase or connectionstring is replaced by the marker shown above, which is what passwordProfile gets here; a value that is a pre-authenticated URL is cut after its capability parameter, the way a -Debug trace cuts it; and a request whose own path names the secret it carries - resetPassword, uploadSecret, addKey - has its whole Body replaced by that marker instead, as does an item whose body could not be read for redaction.
 
 ### Example 9: Pipeline usage at scale (recommended pattern)
 ```powershell
@@ -120,7 +123,7 @@ Creates 1000 users via batch. Any failures (status >= 400) are appended to the J
 $urls = 1..10000 | ForEach-Object { "/users/$_" }
 $urls | Invoke-MgxBatchRequest
 
-# Avoid: calling in a tight loop - many more round-trips than one chunked call
+# Avoid: calling in a tight loop - slower and can cause threading errors at 200+ iterations
 foreach ($url in $urls) { $url | Invoke-MgxBatchRequest }
 ```
 
@@ -147,6 +150,8 @@ Accept wildcard characters: False
 ### -Body
 Request body for all requests when piping string URLs. Ignored when pipeline input carries its own Body member.
 
+Bodies follow the same serialization contract as Invoke-MgxRequest -Body. An item whose body serialization refuses a value (a SecureString, NaN) fails on its own, like an item whose body is not valid JSON; the rest of the batch is sent. So does an item whose body the redaction check cannot read: a raw-string body carrying an unpaired surrogate escape - `{"displayName":"Jos\ud83d"}` - is a document the JSON parser accepts and the check cannot read a string out of, and the check is what decides whether a body may be sent, so that item is refused naming the reason and the rest of the batch is sent.
+
 ```yaml
 Type: Object
 Parameter Sets: (All)
@@ -159,38 +164,16 @@ Accept pipeline input: False
 Accept wildcard characters: False
 ```
 
-
-### -FollowNextLink
-Drain `@odata.nextLink` in sub-response bodies, merging the pages into each result. Off by default.
-
-A batched sub-request against a collection returns only its first page, and `/$batch` does not page. Without this switch each such result is a partial collection, and you cannot tell: the conversion to a hashtable strips `@odata.nextLink` along with the rest of the `@odata.*` metadata, so a truncated read looks exactly like a complete one.
-
-Follow-up pages are submitted as further batches rather than per-item GETs, so N partial collections drain in ceil(N/20) requests per page.
-
-If a page cannot be read - an HTTP failure, or a `nextLink` that fails host validation - that one sub-request is marked failed: `Status` becomes the failing page's status, `PagingIncomplete` is set to `$true`, and a non-terminating error is written (`BatchPagingFailed`, `BatchNextLinkRefused`, or `BatchPagingTruncated`). The items already collected stay in `Body`, so you can use them deliberately. One failed link never discards the other results in the batch.
-
-```yaml
-Type: SwitchParameter
-Required: False
-Position: Named
-Default value: False
-Accept pipeline input: False
-Accept wildcard characters: False
-```
-
-### -MaxPage
-Ceiling on the number of pages drained per sub-request when `-FollowNextLink` is used. The default, 0, is unlimited. Hitting the ceiling marks the result `PagingIncomplete` and writes a `BatchPagingTruncated` error, so a bounded read is never mistaken for a complete one.
-
-```yaml
-Type: Int32
-Required: False
-Position: Named
-Default value: 0
-Accept pipeline input: False
-Accept wildcard characters: False
-```
 ### -DeadLetterPath
-Path to a JSONL file where failed batch items (status >= 400) are appended, along with any that were never sent because an earlier chunk failed. Each line contains Url, Method, Body (with sensitive fields redacted), Status, Error, Timestamp, and the Id if one was supplied. It is a record of what to retry, not a request you can replay directly: the redaction that keeps passwords out of the file also means a redacted Body is no longer the body that was sent. Read it to decide what to resubmit, and supply the sensitive fields again yourself.
+Path to a JSONL file where the batch's failed and never-sent items are appended: anything the server answered with a status >= 400, the items of a chunk whose own POST failed, which carry that failure's status, and the items of chunks that were never POSTed, which carry status 0. Nothing the server confirmed is ever written, so the file holds only work that is still outstanding. Each line holds Timestamp, Url, Method and Status, then Body where the request had one, with sensitive fields redacted, then Error where the item's own response carried an error message: a never-sent item has no response to read one from, and neither does an item of a refused chunk the server did not answer, so their lines end at Body. It is a record of what to retry, not a request you can replay directly: the redaction that keeps passwords out of the file also means a redacted Body is no longer the body that was sent. Any field whose name carries password, secret, credential, key, token, assertion, passphrase or connectionstring is replaced by a redaction marker, and so is any field whose name carries downloadUrl, because a pre-authenticated URL fetches the file with no token of its own. A value that is a URL carrying a capability parameter - `sig`, `tempauth`, `guestaccesstoken`, `authkey`, `X-Amz-Signature` - is cut after that parameter and the rest replaced by the marker, the way a -Debug trace cuts it, so the host and the parameter name still say which URL failed; an ordinary link is left whole, because `@odata.nextLink` and a `webUrl` are half of what the line is read for. Where the URL itself names the secret - resetPassword, uploadSecret, addKey, synchronization/secrets - the whole Body is that marker, because those bodies hold the credential under a name that says nothing. A body the redaction cannot walk at all - one naming the same property twice is such a body - gets the marker whole for the same reason, and the run writes a warning naming the item whose body was withheld. What stands in the file is:
+
+```
+***REDACTED***
+```
+
+Read it to decide what to resubmit, and supply the sensitive fields again yourself. Re-piping the file - `Get-Content dead.jsonl | ConvertFrom-Json | Invoke-MgxBatchRequest` - resends the lines that carry no marker, and refuses the ones that do as an error record before the first chunk leaves: a Body that is the marker whole is not JSON, and a Body carrying it in a field parses but is no longer the body that was sent, so that one is refused naming the field. Any body carrying that marker text is refused the same way before the first chunk leaves, whether it came from the file or not. Under -ErrorAction Stop - which this cmdlet's description recommends - the pipeline then ends with nothing sent at all: re-pipe at the default error preference, or filter the marker lines out first. A refused item carries that status whether its POST reached the server and went unanswered or never left at all - an open circuit, a rate limiter with no permit for it - and the status does not separate the two. Read it as the first: the write may have been applied, so resending one is a decision about duplicates rather than a free retry. Only status 0 says nothing was sent.
+
+The file is opened before the first request goes out and held open for the run, so a path this run cannot write - a directory standing at it, a parent directory that is not there, a file this account may not write - is refused with nothing sent at all, and the error says so: fix the path and run the same command again. It has to be a file system path with something in it. `Env:\X` resolves to a bare name relative to nothing and an empty path resolves to the working directory, so both are refused rather than written somewhere nobody named. A run with no failed and no never-sent items has no lines for the file, and one it created for them is removed again, so a batch that succeeded whole leaves nothing behind; a file that was already there holds an earlier run's outstanding work and is left as it was, and so is one a second run appending to the same path has put a line in.
 
 ```yaml
 Type: String
@@ -221,6 +204,18 @@ Accept wildcard characters: False
 
 ### -ConsistencyLevel
 ConsistencyLevel header added to each individual batch item. Required when any batch item URL contains $search (Graph advanced query capabilities). Takes precedence over the same key in -Headers. Source: [Advanced query capabilities on Microsoft Entra ID objects](https://learn.microsoft.com/en-us/graph/aad-advanced-queries)
+
+```yaml
+Type: String
+Parameter Sets: (All)
+Aliases:
+
+Required: False
+Position: Named
+Default value: None
+Accept pipeline input: False
+Accept wildcard characters: False
+```
 
 ### -Headers
 Custom headers applied to each individual batch item. Accepts a hashtable of key-value pairs. Merged with -ConsistencyLevel and -ThrottlePriority (dedicated parameters take precedence over matching keys in -Headers).
@@ -255,18 +250,6 @@ Accept pipeline input: False
 Accept wildcard characters: False
 ```
 
-```yaml
-Type: String
-Parameter Sets: (All)
-Aliases:
-
-Required: False
-Position: Named
-Default value: None
-Accept pipeline input: False
-Accept wildcard characters: False
-```
-
 ### -Method
 HTTP method for all requests when piping string URLs. Default: GET. Ignored when pipeline input carries its own Method member.
 
@@ -284,7 +267,7 @@ Accept wildcard characters: False
 ```
 
 ### -Uri
-Graph API URLs to batch. Accepts absolute URLs (https://graph.microsoft.com/v1.0/users/id) or relative URLs (/users/id). Also accepts hashtables or PSCustomObjects with Url, Method, and Body members for per-item control, plus an optional Id that is echoed back on the matching result.
+Graph API URLs to batch. Accepts absolute URLs (https://graph.microsoft.com/v1.0/users/id) or relative URLs (/users/id). Also accepts hashtables or PSCustomObjects with Url, Method, and Body members for per-item control.
 
 ```yaml
 Type: Object[]
@@ -299,7 +282,9 @@ Accept wildcard characters: False
 ```
 
 ### -WhatIf
-Shows what would happen if the cmdlet runs. The cmdlet is not run.
+Shows what would happen if the cmdlet runs. The cmdlet is not run. The gate covers reads as well as writes: an all-GET batch is described and not sent, because even a read batch spends resource units, can be throttled, and emits objects into the pipeline. Invoke-MgxRequest makes the other choice and sends its reads under -WhatIf.
+
+The count it names is what would be sent. Bodies are validated and checked for the redaction marker before the gate, so an item either of those refuses is left out of that count and named beside it - `PATCH 1 request via $batch; 2 refused` - and each refusal is written as the error record it is, under -WhatIf as without it: a refusal is not an action the gate governs.
 
 ```yaml
 Type: SwitchParameter
@@ -339,18 +324,18 @@ String URLs, or hashtables or PSCustomObjects with Url, Method, and Body members
 ## OUTPUTS
 
 ### System.Collections.Hashtable
-Per-request results with Url, Method, Status, and Body keys, plus Id when the request supplied one, NotSent on any operation that was never sent because an earlier chunk failed, and PagingIncomplete when -FollowNextLink could not drain the collection. Body here is the RESPONSE body - for a failure that is the error envelope, not the request - so piping results straight back resubmits the wrong thing. Use Url and Method to rebuild the requests you want to retry.
+Per-request results with Url, Method, Status, and Body keys. Status says what became of the operation: an item the server answered keeps the status it answered with; an item whose chunk was refused carries the refusal's status (>= 400), which covers both a POST that went out unanswered and one an open circuit or a rate limiter stopped before it left, so read it as a write that may have been applied; only an item in a chunk that was never POSTed gets status 0, and only those carry NotSent - another chunk of the batch failed, not necessarily one before it, since chunks can run in parallel. Body here is the RESPONSE body - for a failure that is the error envelope, not the request - so piping results straight back resubmits the wrong thing. Use Url and Method to rebuild the requests you want to retry.
 
 ## NOTES
 Each batch item is retried individually on 429 (throttled) or 5xx errors (for idempotent methods). POST requests only retry on 429 because POST is non-idempotent - retrying a failed POST on 5xx could create duplicates if the server processed the request before the error. This matches the Kiota SDK retry behavior. Source: [Microsoft Graph error responses and resource types](https://learn.microsoft.com/en-us/graph/errors)
 
-Items that exhaust per-chunk retries get one additional batch-level retry pass.
+Items that exhaust per-chunk retries get one additional batch-level retry pass, except after a chunk failure: the run has stopped sending, and that pass is a send. It is skipped for every item it would have picked up, including items in chunks that were POSTed and answered in full, and they are handed back with the status the server gave them rather than resent.
 
 Use -Verbose to see retry counts, throttle encounters, and timing.
 
 Batching reduces HTTP round-trips (20 operations per request instead of 1), but Graph counts each item inside a batch individually against the server-side write quota (3,000 writes / 2.5 min per app+tenant). Sustained write throughput caps at ~20/sec regardless of batching. See [Set-MgxOption](Set-MgxOption.md) for the full throttle limits table and tuning guidance. Source: [Microsoft Graph service-specific throttling limits](https://learn.microsoft.com/en-us/graph/throttling-limits)
 
-Pipe all items into a single Invoke-MgxBatchRequest call rather than calling it in a loop. One call chunks the items itself, so it makes far fewer round-trips than a loop of single-item calls and reuses one HTTP client, one rate limiter and one circuit breaker. Repeated invocation is safe at any rate the host can drive.
+For best performance and stability, always pipe all items into a single Invoke-MgxBatchRequest call rather than calling it in a loop. At 200+ rapid invocations per second, PowerShell's internal pipeline thread safety can race between cmdlet instances. Piping all items into one call avoids this entirely and is significantly faster.
 
 ## RELATED LINKS
 [Invoke-MgxRequest](Invoke-MgxRequest.md)
