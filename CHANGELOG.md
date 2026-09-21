@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.2
+
+### Fixed
+
+- A Graph error reported only its top level message, which for a validation failure is only `The request is invalid.`, while the property that was actually wrong sat in the `innerError` of the response and was discarded. `GraphServiceException` now appends that message and exposes it as `InnerErrorMessage`.
+
 ## 2.1.1
 
 ### Fixed
