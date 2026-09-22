@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Mgx.Cmdlets.Cmdlets.Batch;
@@ -630,7 +630,7 @@ public class BatchWriteTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = new List<BatchOperation> { new("/users/user1", "GET") };
         var result = await batchClient.ExecuteBatchIndexedAsync(operations);
@@ -783,7 +783,7 @@ public class BatchWriteTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var operations = new List<BatchOperation> { new("/users/user1", "GET") };
         var result = await batchClient.ExecuteBatchIndexedAsync(operations);
@@ -826,7 +826,7 @@ public class BatchWriteTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var body = JsonSerializer.Deserialize<JsonElement>("""{"displayName":"Test"}""");
         var operations = new List<BatchOperation> { new("/users", "POST", body) };
@@ -846,7 +846,9 @@ public class BatchWriteTests
     [Fact]
     public async Task BatchGet_VerboseWriter_LogsClampEvent()
     {
-        // Server requests 300s Retry-After, client clamps to 120s (default).
+        // Server requests 300s Retry-After, client clamps it to the cap it was built with.
+        // The cap is 1s rather than the 120s default so the clamp is observable without the
+        // test sleeping out the default.
         // VerboseWriter should receive a clamping message.
         var throttledResponse = """
         {
@@ -869,7 +871,7 @@ public class BatchWriteTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var verboseMessages = new List<string>();
         batchClient.VerboseWriter = msg => verboseMessages.Add(msg);
@@ -1197,7 +1199,7 @@ public class BatchWriteTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = Enumerable.Range(1, 20)
             .Select(i => new BatchOperation($"/users/{i}"))
@@ -1326,7 +1328,7 @@ public class BatchWriteTests
             AttemptTimeoutSeconds = 5,
             TotalTimeoutSeconds = 30
         });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = new[]
         {

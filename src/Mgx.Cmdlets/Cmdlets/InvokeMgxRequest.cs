@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Management.Automation;
 using System.Net;
 using System.Net.Http.Headers;
@@ -59,6 +59,15 @@ public class InvokeMgxRequest : MgxCmdletBase
 
     [Parameter]
     public SwitchParameter Raw { get; set; }
+
+    /// <summary>
+    /// Emit the payload as the service sent it, collection envelope and all, instead of the items
+    /// inside it. A caller that has to tell one item in a collection from a single entity cannot do
+    /// it from the unwrapped output: both are one object. -All keeps aggregating pages and ignores
+    /// this.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter Envelope { get; set; }
 
     #endregion
 
@@ -1140,6 +1149,12 @@ public class InvokeMgxRequest : MgxCmdletBase
 
     private void OutputPayload(JsonElement json, string? sourceId)
     {
+        if (Envelope.IsPresent)
+        {
+            OutputItem(json, sourceId);
+            return;
+        }
+
         var items = TryUnwrapCollection(json, out var truncated);
         if (items == null)
         {

@@ -1,4 +1,4 @@
----
+﻿---
 external help file: Mgx.Cmdlets.dll-Help.xml
 Module Name: Mgx
 online version: https://github.com/Microsoft365DSC/mgx/blob/main/Modules/M365DSC.mgx/help/Invoke-MgxRequest.md
@@ -385,6 +385,21 @@ OData $select properties to include in the response. Reduces payload size by req
 Type: String[]
 Parameter Sets: (All)
 Aliases: Select
+
+Required: False
+Position: Named
+Default value: None
+Accept pipeline input: False
+Accept wildcard characters: False
+```
+
+### -Envelope
+Return the payload as the service sent it, collection envelope and all, instead of the items inside it. Without it a collection holding one item and a single entity are both one object, which a caller that has to tell them apart cannot do. -All aggregates pages and ignores this.
+
+```yaml
+Type: SwitchParameter
+Parameter Sets: (All)
+Aliases:
 
 Required: False
 Position: Named

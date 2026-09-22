@@ -1,4 +1,4 @@
-using System.Management.Automation;
+﻿using System.Management.Automation;
 using System.Management.Automation.Host;
 using System.Net;
 using Mgx.Engine.Http;
@@ -113,7 +113,7 @@ public class PartialBatchResultTests
         using var httpClient = new HttpClient(wire);
         using var client = new ResilientGraphClient(httpClient,
             new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAttempts = 1 });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = Enumerable.Range(1, 20)
             .Select(i => new BatchOperation($"/users/u{i}", "PATCH", null))
@@ -192,7 +192,7 @@ public class PartialBatchResultTests
         using var httpClient = new HttpClient(new FirstChunkOnlyHandler());
         using var client = new ResilientGraphClient(httpClient,
             new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAttempts = 1 });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = Enumerable.Range(1, 60)
             .Select(i => new BatchOperation($"/users/u{i}", "PATCH", null))
@@ -362,7 +362,7 @@ public class PartialBatchResultTests
         using var httpClient = new HttpClient(wire);
         using var client = new ResilientGraphClient(httpClient,
             new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAttempts = 1 });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = Enumerable.Range(1, 2)
             .Select(i => new BatchOperation($"/users/u{i}", "PATCH", null))
@@ -416,7 +416,7 @@ public class PartialBatchResultTests
         using var httpClient = new HttpClient(new SecondChunkGarbledHandler());
         using var client = new ResilientGraphClient(httpClient,
             new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAttempts = 1 });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = Enumerable.Range(1, 40)
             .Select(i => new BatchOperation($"/users/u{i}", "PATCH", null))
@@ -501,7 +501,7 @@ public class PartialBatchResultTests
         using var httpClient = new HttpClient(new RefusesTheRetryPassHandler(garbled: false));
         using var client = new ResilientGraphClient(httpClient,
             new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAttempts = 1 });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = Enumerable.Range(1, 40)
             .Select(i => new BatchOperation($"/users/u{i}", "PATCH", null))
@@ -580,7 +580,7 @@ public class PartialBatchResultTests
         using var httpClient = new HttpClient(new NotModifiedHandler());
         using var client = new ResilientGraphClient(httpClient,
             new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAttempts = 1 });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = Enumerable.Range(1, 20)
             .Select(i => new BatchOperation($"/users/u{i}", "PATCH", null))
@@ -748,7 +748,7 @@ public class PartialBatchResultTests
         using var httpClient = new HttpClient(wire);
         using var client = new ResilientGraphClient(httpClient,
             new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAttempts = 1 });
-        var batchClient = new GraphBatchClient(client);
+        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
 
         var ops = Enumerable.Range(1, 20)
             .Select(i => new BatchOperation("/users", "POST",

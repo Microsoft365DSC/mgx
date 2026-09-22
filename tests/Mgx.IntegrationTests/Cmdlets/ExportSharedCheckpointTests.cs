@@ -1,4 +1,4 @@
-using System.Management.Automation;
+﻿using System.Management.Automation;
 using System.Net;
 using System.Text;
 using Mgx.Engine.Pagination;
@@ -2437,8 +2437,9 @@ public class ExportSharedCheckpointTests
     /// The two runs the shapes above were taken from, released together on the promotion route.
     /// Both completed: whichever lost the promotion found the temp gone, warned that the items it
     /// counted were not on disk, deleted the position counting them, exported from the beginning
-    /// and moved its own temp over the file the other one was holding and appending to. One of
-    /// them ends the run instead now, and nothing it would have taken with it moves.
+    /// and moved its own temp over the file the other one was holding and appending to. A run
+    /// that loses a file ends there instead now, and nothing it would have taken with it moves -
+    /// whichever of the two files it lost, and whether one of them lost one or both did.
     /// </summary>
     [Fact]
     public void Two_exports_released_together_on_the_promotion_route_leave_one_with_the_file()
@@ -2482,34 +2483,63 @@ public class ExportSharedCheckpointTests
                 Assert.True(r.Wait(TimeSpan.FromSeconds(60)), "an export never came up");
             go.Set();
 
-            // One of them got past the reconcile, so it holds the output and is parked on its
-            // first request. It stays there until the other has finished, which is what the run
-            // that stops does with nothing on the wire at all.
-            Assert.True(gate.Arrived.Wait(TimeSpan.FromSeconds(60)),
-                "neither export reached the wire");
+            // A run that got past the reconcile holds the output and is parked on its first
+            // request. It stays there until the other has finished, which is what a run that
+            // stops does with nothing on the wire at all - and which file it loses, the output
+            // or the name the promotion stages into, is the race. Both of them losing one is an
+            // outcome of it: then no run has the output and none of them asks for a page.
             Assert.True(
-                SpinWait.SpinUntil(() => threads.Any(t => !t.IsAlive), TimeSpan.FromSeconds(60)),
-                "both exports were still running with one of them holding the output");
+                SpinWait.SpinUntil(() => gate.Arrived.IsSet || threads.All(t => !t.IsAlive),
+                    TimeSpan.FromSeconds(60)),
+                "neither export reached the wire or finished");
+            if (gate.Arrived.IsSet)
+            {
+                Assert.True(
+                    SpinWait.SpinUntil(() => threads.Any(t => !t.IsAlive),
+                        TimeSpan.FromSeconds(60)),
+                    "both exports were still running with one of them holding the output");
+            }
 
             gate.Released.Set();
             foreach (var t in threads)
                 Assert.True(t.Join(TimeSpan.FromSeconds(60)), "an export never finished");
             Assert.All(failures, Assert.Null);
 
-            // Exactly one run stopped, on one of the two files this checkpoint stands for, and
-            // it neither asked for a page nor said the items it was protecting were lost.
-            var stop = Assert.Single(results.SelectMany(r => r.Errors));
-            Assert.StartsWith("Checkpoint", stop.FullyQualifiedErrorId, StringComparison.Ordinal);
-            Assert.Contains("This run stops here; nothing was written.", stop.Exception.Message);
+            // Every run that stopped did so on one of the files this checkpoint stands for,
+            // saying it wrote nothing and changed nothing, and none of them said the items it
+            // was protecting were lost.
+            var stops = results.SelectMany(r => r.Errors).ToArray();
+            Assert.All(stops, s => Assert.StartsWith("Checkpoint", s.FullyQualifiedErrorId,
+                StringComparison.Ordinal));
+            Assert.All(stops, s => Assert.True(
+                s.Exception.Message.Contains("This run stops here; nothing was written.")
+                    || s.Exception.Message.Contains("Nothing was changed;"),
+                s.Exception.Message));
             Assert.DoesNotContain(results.SelectMany(r => r.Warnings),
                 w => w.Contains("missing or incomplete"));
 
-            // One run had the file: every item once, in order, and the position spent by the run
-            // that finished rather than by the run that gave up on it.
-            Assert.Equal(["{\"id\":\"u1\"}", "{\"id\":\"u2\"}", "{\"id\":\"u3\"}"],
-                File.ReadAllLines(output));
-            Assert.False(File.Exists(checkpoint));
-            Assert.Empty(Directory.GetFiles(dir, "out.jsonl.*.tmp"));
+            if (gate.Arrived.IsSet)
+            {
+                // One run had the file: every item once, in order, and the position spent by
+                // the run that finished rather than by the run that gave up on it.
+                Assert.Single(stops);
+                Assert.Equal(["{\"id\":\"u1\"}", "{\"id\":\"u2\"}", "{\"id\":\"u3\"}"],
+                    File.ReadAllLines(output));
+                Assert.False(File.Exists(checkpoint));
+                Assert.Empty(Directory.GetFiles(dir, "out.jsonl.*.tmp"));
+            }
+            else
+            {
+                // Neither had it: the two files they were released on are the two files they
+                // leave, with every item the checkpoint counts still in the temp it names.
+                Assert.Equal(2, stops.Length);
+                Assert.False(File.Exists(output));
+                var left = PaginationCheckpoint.Load(checkpoint);
+                Assert.NotNull(left!.TempFile);
+                Assert.True(File.Exists(Path.Combine(dir, left.TempFile!)),
+                    "a run that changed nothing took the temp with it");
+            }
+
             Assert.Empty(Directory.GetFiles(dir, "*.adopt"));
         }
         finally

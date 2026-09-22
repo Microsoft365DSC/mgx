@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Management.Automation;
 using System.Net;
 using System.Text;
@@ -51,6 +51,61 @@ public class InvokeMgxRequestCollectionTests : IDisposable
         Assert.Contains("\"id\"", Assert.IsType<string>(Assert.Single(result.Output).BaseObject));
     }
 
+    [Fact]
+    public void Envelope_keeps_a_one_item_collection_a_collection()
+    {
+        using var host = new MgxTestHost(Json(Page("u1")));
+
+        var result = host.Run(ps => ps.AddCommand("Invoke-MgxRequest")
+            .AddParameter("Uri", "/users?$filter=id eq 'u1'")
+            .AddParameter("Envelope"));
+
+        var payload = (Hashtable)Assert.Single(result.Output).BaseObject;
+        var items = Assert.IsAssignableFrom<IEnumerable>(payload["value"]).Cast<object>().ToList();
+        Assert.Equal("u1", (string)((Hashtable)Assert.Single(items))["id"]!);
+    }
+
+    [Fact]
+    public void Envelope_leaves_an_entity_payload_as_it_is()
+    {
+        using var host = new MgxTestHost(Json("""{ "id": "u1" }"""));
+
+        var result = host.Run(ps => ps.AddCommand("Invoke-MgxRequest")
+            .AddParameter("Uri", "/users/u1")
+            .AddParameter("Envelope"));
+
+        Assert.Equal("u1", Id(Assert.Single(result.Output)));
+    }
+
+    [Fact]
+    public void Envelope_holds_every_item_and_still_strips_the_transport_metadata()
+    {
+        using var host = new MgxTestHost(Json(
+            """{ "@odata.count": 7, "value": [ { "id": "u1" }, { "id": "u2" } ] }"""));
+
+        var result = host.Run(ps => ps.AddCommand("Invoke-MgxRequest")
+            .AddParameter("Uri", "/users")
+            .AddParameter("Envelope"));
+
+        var payload = (Hashtable)Assert.Single(result.Output).BaseObject;
+        Assert.Equal(2, Assert.IsAssignableFrom<IEnumerable>(payload["value"]).Cast<object>().Count());
+        Assert.False(payload.ContainsKey("@odata.count"));
+    }
+
+    [Fact]
+    public void Envelope_with_raw_emits_the_payload_whole()
+    {
+        using var host = new MgxTestHost(Json(Page("u1")));
+
+        var result = host.Run(ps => ps.AddCommand("Invoke-MgxRequest")
+            .AddParameter("Uri", "/users")
+            .AddParameter("Envelope")
+            .AddParameter("Raw"));
+
+        var text = Assert.IsType<string>(Assert.Single(result.Output).BaseObject);
+        Assert.Contains("\"value\"", text);
+        Assert.Contains("\"u1\"", text);
+    }
     [Fact]
     public void A_collection_payload_from_an_entity_request_is_unwrapped_and_flagged_as_truncated()
     {

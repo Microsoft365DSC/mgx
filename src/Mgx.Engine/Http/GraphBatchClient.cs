@@ -1,4 +1,4 @@
-using Mgx.Engine.Errors;
+﻿using Mgx.Engine.Errors;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
@@ -972,9 +972,12 @@ public sealed class GraphBatchClient
                 // batch open for a Retry-After the run has already stopped honoring.
                 if (stopRequested.IsCancellationRequested) break;
 
+                // The exponential fallback answers to the same ceiling as a server-sent
+                // Retry-After: a cap on how long one attempt may hold the batch open is not
+                // a cap on only the delays the server asked for.
                 var baseDelaySeconds = maxRetryAfterSeconds > 0
                     ? maxRetryAfterSeconds
-                    : (int)Math.Pow(2, attempt);
+                    : Math.Min((int)Math.Pow(2, attempt), _maxRetryAfterSeconds);
                 // C4: Add 0-50% jitter to prevent thundering herd on batch retries
                 var jitter = baseDelaySeconds * Random.Shared.NextDouble() * 0.5;
                 var retrySw = Stopwatch.StartNew();

@@ -2613,6 +2613,17 @@ foreach ($url in $urls) { $url | Invoke-MgxBatchRequest }</dev:code>
           <dev:defaultValue>None</dev:defaultValue>
         </command:parameter>
         <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
+          <maml:name>Envelope</maml:name>
+          <maml:description>
+            <maml:para>Return the payload as the service sent it, collection envelope and all, instead of the items inside it. Without it a collection holding one item and a single entity are both one object, which a caller that has to tell them apart cannot do. -All aggregates pages and ignores this.</maml:para>
+          </maml:description>
+          <dev:type>
+            <maml:name>SwitchParameter</maml:name>
+            <maml:uri />
+          </dev:type>
+          <dev:defaultValue>False</dev:defaultValue>
+        </command:parameter>
+        <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
           <maml:name>Raw</maml:name>
           <maml:description>
             <maml:para>Return raw JSON strings instead of hashtables. Useful for piping to ConvertFrom-Json or writing to files.</maml:para>
@@ -2911,6 +2922,18 @@ foreach ($url in $urls) { $url | Invoke-MgxBatchRequest }</dev:code>
           <maml:uri />
         </dev:type>
         <dev:defaultValue>None</dev:defaultValue>
+      </command:parameter>
+      <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
+        <maml:name>Envelope</maml:name>
+        <maml:description>
+          <maml:para>Return the payload as the service sent it, collection envelope and all, instead of the items inside it. Without it a collection holding one item and a single entity are both one object, which a caller that has to tell them apart cannot do. -All aggregates pages and ignores this.</maml:para>
+        </maml:description>
+        <command:parameterValue required="false" variableLength="false">SwitchParameter</command:parameterValue>
+        <dev:type>
+          <maml:name>SwitchParameter</maml:name>
+          <maml:uri />
+        </dev:type>
+        <dev:defaultValue>False</dev:defaultValue>
       </command:parameter>
       <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
         <maml:name>Raw</maml:name>

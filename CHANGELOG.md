@@ -1,4 +1,14 @@
-# Changelog
+﻿# Changelog
+
+## 2.1.7
+
+### Added
+
+- `Invoke-MgxRequest -Envelope` emits the payload as the service sent it, collection envelope and all, instead of the items inside it. Without it a collection holding one item and a single entity arrive as the same thing - one object - which a caller that has to tell them apart cannot do. `-All` keeps aggregating pages and ignores the switch. Upstream does not carry this.
+
+### Fixed
+
+- The batch retry loop waited out its exponential fallback without regard for `MaxRetryAfterSeconds`, which caps only the delays a server asks for. Both now answer to the same ceiling.
 
 ## 2.1.6
 
