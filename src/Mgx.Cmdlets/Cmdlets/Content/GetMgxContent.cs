@@ -9,18 +9,25 @@ using Polly.CircuitBreaker;
 namespace Mgx.Cmdlets.Cmdlets.Content;
 
 /// <summary>
-/// Fetches content bytes from $value and /content endpoints, whole or as a byte range.
-/// The request runs in two hops. Hop one is the authenticated Graph request through the full
-/// resilience pipeline. When Graph answers with a 302 to a pre-authenticated download host,
-/// hop two fetches it without a token, against an allowlist, so the bearer token never reaches
-/// that host.
-/// Output is a single byte array to the pipeline, or a file via -OutFile.
+/// Get-MgxContent: Fetch content bytes ($value / /content endpoints), whole or as a byte
+/// range. Ranged reads are the point: pulling 256 KB headers off 20k files moves ~5 GB
+/// instead of 63 GB for a metadata job.
+///
+/// Two hops under the hood: the authenticated Graph request (full resilience pipeline,
+/// pacing, rate limiting), then - when Graph 302s to a pre-authenticated download host - a
+/// token-free fetch whose target is validated against a Microsoft-hosts allowlist. The
+/// bearer token never reaches the download host. See GraphContentClient for the mechanism
+/// and the transport preconditions.
+///
+/// Output is a single byte[] to the pipeline, or a file via -OutFile (temp + atomic move).
+/// Piped DriveItems use their @microsoft.graph.downloadUrl directly (validated first) or
+/// fall back to /drives/{driveId}/items/{id}/content.
 /// </summary>
 [Cmdlet(VerbsCommon.Get, "MgxContent", DefaultParameterSetName = "Uri")]
 [OutputType(typeof(byte[]))]
 public class GetMgxContent : MgxCmdletBase
 {
-    /// <summary>A byte array larger than this must go to -OutFile.</summary>
+    /// <summary>Pipeline output guard: a byte[] larger than this must go to -OutFile.</summary>
     internal const long MaxPipelineBytes = 100L * 1024 * 1024;
 
     [Parameter(Mandatory = true, Position = 0, ParameterSetName = "Uri")]
@@ -30,14 +37,17 @@ public class GetMgxContent : MgxCmdletBase
     [Parameter(Mandatory = true, ValueFromPipeline = true, ParameterSetName = "InputObject")]
     public object? InputObject { get; set; }
 
+    /// <summary>First N bytes (Range: bytes=0..N-1). Mutually exclusive with -Offset/-Length.</summary>
     [Parameter]
     [ValidateRange(1, long.MaxValue)]
     public long First { get; set; }
 
+    /// <summary>Range start, used with -Length (Range: bytes=Offset..Offset+Length-1).</summary>
     [Parameter]
     [ValidateRange(0, long.MaxValue)]
     public long Offset { get; set; }
 
+    /// <summary>Range length, from -Offset (default 0).</summary>
     [Parameter]
     [ValidateRange(1, long.MaxValue)]
     public long Length { get; set; }
@@ -56,8 +66,11 @@ public class GetMgxContent : MgxCmdletBase
     private string VersionedBaseUrl => $"{s_graphEndpoint}/{ApiVersion}";
     private string? _resolvedOutFile;
 
-    // -OutFile carries no ParameterSetName, so it binds in the InputObject set too. One
-    // destination and many piped items would download all of them and keep only the last
+    // -OutFile carries no ParameterSetName, so it binds in the InputObject set too and the help
+    // documents that combination. With a single destination and File.Move(overwrite: true) per
+    // record, piping N items downloaded all N and left one file - the last writer winning, with
+    // no warning and full transfer cost for the discarded ones. Export-MgxCollection and
+    // Sync-MgxDelta guard the analogous case; this did not.
     private bool _wroteOutFile;
     private bool _transportChecked;
 
@@ -65,8 +78,8 @@ public class GetMgxContent : MgxCmdletBase
     {
         if (ParameterSetName == "Uri")
         {
-            if (Uri.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
-                Uri.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+            if (Uri.TrimStart().StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                Uri.TrimStart().StartsWith("http://", StringComparison.OrdinalIgnoreCase))
             {
                 ThrowTerminatingError(new ErrorRecord(
                     new ArgumentException(
@@ -84,7 +97,7 @@ public class GetMgxContent : MgxCmdletBase
             }
         }
 
-        // -First and -Offset/-Length are two ways to say the same thing and must not disagree
+        // -First XOR -Offset/-Length: two ways to say the same thing must not disagree.
         var boundParams = MyInvocation.BoundParameters;
         var hasFirst = boundParams.ContainsKey(nameof(First));
         var hasOffset = boundParams.ContainsKey(nameof(Offset));
@@ -110,6 +123,27 @@ public class GetMgxContent : MgxCmdletBase
 
     protected override void ProcessRecord()
     {
+        if (ParameterSetName != "Uri" && InputObject == null)
+        {
+            // A null item was never a download; it must not trip the one-OutFile guard.
+            WriteVerbose("Skipping null pipeline input.");
+            return;
+        }
+
+        if (_wroteOutFile && !string.IsNullOrEmpty(OutFile))
+        {
+            // Refuse rather than overwrite - and refuse BEFORE fetching, so the second
+            // item's content is not downloaded just to be discarded. Checked here, not in
+            // BeginProcessing, so the legitimate single-piped-item case still works.
+            ThrowTerminatingError(new ErrorRecord(
+                new InvalidOperationException(
+                    "-OutFile writes a single file, but more than one item was piped in. "
+                    + "Each item would overwrite the last. Pipe one item, or omit -OutFile "
+                    + "and redirect the byte[] output per item."),
+                "OutFileWithMultipleInputs", ErrorCategory.InvalidOperation, OutFile));
+            return;
+        }
+
         if (ParameterSetName == "Uri")
         {
             FetchContent(downloadUrl: null,
@@ -118,22 +152,17 @@ public class GetMgxContent : MgxCmdletBase
             return;
         }
 
-        if (InputObject == null)
-        {
-            WriteVerbose("Skipping null pipeline input.");
-            return;
-        }
+        var value = UnwrapPSObject(InputObject!); // null handled above
 
-        var value = UnwrapPSObject(InputObject);
-
-        // The item own pre-authenticated download URL avoids the hop-one round trip and its
-        // request-budget charge. Validated against the allowlist before any fetch
+        // Prefer the item's own pre-authenticated download URL: no hop-1 round trip, no
+        // request-budget charge. Validated against the allowlist before any fetch.
         if (TryGetMember(value, "@microsoft.graph.downloadUrl")?.ToString() is { Length: > 0 } itemDownloadUrl)
         {
             FetchContent(downloadUrl: itemDownloadUrl, relativeUri: null, errorTarget: InputObject);
             return;
         }
 
+        // Fall back to /drives/{driveId}/items/{id}/content from the item's identifiers.
         var id = Cmdlets.InvokeMgxRequest.ResolvePipelineId(value);
         var driveId = TryGetMember(TryGetMember(value, "parentReference"), "driveId")?.ToString();
         if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(driveId))
@@ -148,7 +177,7 @@ public class GetMgxContent : MgxCmdletBase
         }
 
         FetchContent(downloadUrl: null,
-            relativeUri: $"/drives/{driveId}/items/{id}/content",
+            relativeUri: $"/drives/{System.Uri.EscapeDataString(driveId)}/items/{System.Uri.EscapeDataString(id)}/content",
             errorTarget: InputObject);
     }
 
@@ -159,6 +188,7 @@ public class GetMgxContent : MgxCmdletBase
         return null;
     }
 
+    /// <summary>Bytes the caller actually asked for; null = the whole file.</summary>
     private long? RequestedBytes => First > 0 ? First : Length > 0 ? Length : null;
 
     private void FetchContent(string? downloadUrl, string? relativeUri, object? errorTarget)
@@ -191,7 +221,8 @@ public class GetMgxContent : MgxCmdletBase
         {
             using var result = downloadUrl != null
                 ? GraphContentClient.GetFromDownloadUrlAsync(
-                    downloadUrl, range, client.BodyReadTimeout, CancellationToken)
+                    downloadUrl, range, client.BodyReadTimeout, CancellationToken,
+                    BuildRequestHeaders(null, Headers))
                     .GetAwaiter().GetResult()
                 : client.GetContentAsync(
                     $"{VersionedBaseUrl}{NormalizePath(relativeUri!)}", range,
@@ -200,15 +231,17 @@ public class GetMgxContent : MgxCmdletBase
 
             DrainClientMessages();
 
-            // The server ignored the range and answered 200 with the full body. Copy only the
-            // requested bytes, disposing the result aborts the rest of the transfer
+            // Truncation path: a range was requested but the server ignored it and answered
+            // 200 with the full body (profile photos do this). Copy only the requested bytes;
+            // disposing the result aborts the rest of the transfer.
             long? maxBytes = null;
             long skipBytes = 0;
             if (range != null && result.StatusCode == HttpStatusCode.OK)
             {
                 maxBytes = RequestedBytes;
-                // The server ignored the offset as well, so discard the head locally or the
-                // caller receives the wrong bytes and is told it worked
+                // The server ignored the offset too, not just the length. Discarding the head
+                // locally is the only way -Offset can mean what it says on this path; without
+                // it the caller silently receives bytes 0..Length-1 and is told it worked.
                 skipBytes = Offset;
                 WriteVerbose(skipBytes > 0
                     ? $"Server ignored the Range header (HTTP 200). Discarding the first {skipBytes:N0} bytes and taking {maxBytes:N0}."
@@ -217,17 +250,6 @@ public class GetMgxContent : MgxCmdletBase
 
             if (_resolvedOutFile != null)
             {
-                if (_wroteOutFile)
-                {
-                    // Refuse rather than overwrite. Checked here so a single piped item still works
-                    ThrowTerminatingError(new ErrorRecord(
-                        new InvalidOperationException(
-                            "-OutFile writes a single file, but more than one item was piped in. "
-                            + "Each item would overwrite the last. Pipe one item, or omit -OutFile "
-                            + "and redirect the byte[] output per item."),
-                        "OutFileWithMultipleInputs", ErrorCategory.InvalidOperation, OutFile));
-                    return;
-                }
                 WriteToFile(result, maxBytes, skipBytes);
                 _wroteOutFile = true;
             }
@@ -241,9 +263,17 @@ public class GetMgxContent : MgxCmdletBase
             DrainClientMessages();
             WriteWarning("Content download cancelled.");
         }
+        catch (GraphServiceException ex) when (ex.StatusCode == HttpStatusCode.NotModified)
+        {
+            // The conditional request worked: the caller's If-None-Match/If-Modified-Since
+            // matched, and there is nothing newer to download. Not an error.
+            DrainClientMessages();
+            WriteVerbose("Not modified; the content matches the caller's condition. Nothing downloaded.");
+        }
         catch (InvalidOperationException ex)
         {
-            // A validator refusal is a security boundary, not a transient fault
+            // Validator refusal or transport-redirect detection: a security boundary, not a
+            // transient fault - surface as such, per item.
             DrainClientMessages();
             WriteError(new ErrorRecord(ex, "ContentDownloadRefused", ErrorCategory.SecurityError, errorTarget));
         }
@@ -253,17 +283,29 @@ public class GetMgxContent : MgxCmdletBase
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // UnauthorizedAccessException is not an IOException. FileStream throws it for an
-            // unwritable parent directory, and File.Move throws it for a read-only destination
-            // on Windows, so both are caught here
+            // UnauthorizedAccessException is NOT an IOException. FileStream throws it for an
+            // unwritable parent directory or a destination that is itself a directory, and
+            // File.Move(overwrite: true) throws it for a read-only destination on Windows - so
+            // an unwritable -OutFile escaped every filter here, skipped DrainClientMessages, and
+            // surfaced as an unhandled error naming a temp path the caller never supplied.
+            // Eleven other sites in this codebase already pair the two; this was the only
+            // file-writing cmdlet that did not.
             DrainClientMessages();
             WriteError(new ErrorRecord(ex, "IOError", ErrorCategory.WriteError, OutFile));
+        }
+        catch (Exception)
+        {
+            // Unexpected exception types skip the drains above; the buffered verbose and
+            // warning messages are the context that explains the failure.
+            DrainClientMessages();
+            throw;
         }
     }
 
     private void WriteToFile(GraphContentResult result, long? maxBytes, long skipBytes)
     {
-        // Temp plus atomic move, so a failed download never truncates an existing file
+        // Temp + atomic move, like every other file-writing path in mgx: a failed download
+        // never truncates an existing file.
         var tempPath = $"{_resolvedOutFile}.{Guid.NewGuid():N}.tmp";
         long copied;
         try
@@ -290,7 +332,7 @@ public class GetMgxContent : MgxCmdletBase
 
     private void WriteToPipeline(GraphContentResult result, long? maxBytes, long skipBytes, object? errorTarget)
     {
-        // Known oversized before a byte moves, so refuse early
+        // Known-oversized before a single byte moves: refuse early.
         var expected = maxBytes ?? result.ContentLength;
         if (expected > MaxPipelineBytes)
         {
@@ -302,8 +344,8 @@ public class GetMgxContent : MgxCmdletBase
             return;
         }
 
-        // Unknown length, so enforce during the copy. Cap one byte over the limit to tell a
-        // capped body from one that is exactly at the limit
+        // Unknown length (chunked): enforce the guard during the copy - cap one byte over
+        // the limit so hitting the cap is distinguishable from an exact-limit body.
         var copyLimit = maxBytes ?? MaxPipelineBytes + 1;
         using var buffer = new MemoryStream(expected is > 0 and <= int.MaxValue ? (int)expected : 0);
         var copied = GraphContentClient.CopyWithIdleTimeoutAsync(

@@ -1,4 +1,36 @@
-# Changelog
+﻿# Changelog
+
+## 2.1.7
+
+### Added
+
+- `Invoke-MgxRequest -Envelope` emits the payload as the service sent it, collection envelope and all, instead of the items inside it. Without it a collection holding one item and a single entity arrive as the same thing - one object - which a caller that has to tell them apart cannot do. `-All` keeps aggregating pages and ignores the switch. Upstream does not carry this.
+
+### Fixed
+
+- The batch retry loop waited out its exponential fallback without regard for `MaxRetryAfterSeconds`, which caps only the delays a server asks for. Both now answer to the same ceiling.
+
+## 2.1.6
+
+Merges upstream `gromedev/mgx` 2.1.2 through 2.1.5. The module name, version line, target framework, CI and examples remain this fork's. The version jumps from 2.1.1 to 2.1.6 so the two version lines stop colliding: upstream had already released its own 2.1.2.
+
+### Fixed
+
+- A Graph error reported only its top level message, which for a validation failure is only `The request is invalid.`, while the property that was actually wrong sat in the `innerError` of the response and was discarded. `GraphServiceException` now appends that message and exposes it as `InnerErrorMessage`. Upstream does not carry this.
+
+### From upstream
+
+- Request bodies serialize correctly for enums, byte arrays, `TimeSpan`, `DateTime` without a `Kind`, `PSCustomObject` members and non-ASCII text, and refuse `SecureString`, credentials, script blocks and self-referencing objects with an explicit error instead of reflection noise or a stack overflow.
+- URI and header handling: no double encoding of pre-encoded `-Filter`, `-Search`, `-Property`, `-Sort` and `-ExpandProperty`, `#` no longer truncates a path, absolute `-Uri` inputs are preserved, array `-Headers` values are sent, content headers are kept, and a caller's `client-request-id` is left alone.
+- Response handling: 204 and empty bodies, HTML and other non-JSON bodies, unparseable JSON, a UTF-8 BOM and a declared charset are all handled without an unhandled exception.
+- Failure classification is unified across retries, circuit breaking, batch retry, content download and adaptive pacing, and error records carry a specific `ErrorCategory` rather than `NotSpecified`.
+- `Invoke-MgxBatchRequest` writes a per-item error record for every failed item, halts on a chunk refusal, reports never-sent items as such, and keeps applied server writes out of the dead-letter file.
+- Dead-letter files and `-Debug` traces redact the same pre-authenticated URLs and sensitive names, and an unwritable dead-letter path is refused before the batch is sent.
+- `Export-MgxCollection` and `Sync-MgxDelta` no longer let a second run resume the same interrupted operation, reject checkpoints belonging to another run or an older release, and stop with the files as found rather than re-enumerating over them.
+
+### Changed
+
+- The engine and cmdlet sources now follow upstream's wording again. The fork's earlier comment rewrites were cosmetic and cost a conflict on every upstream release.
 
 ## 2.1.1
 

@@ -1,12 +1,21 @@
-#Requires -Modules Pester
+﻿#Requires -Modules Pester
 
 <#
-    Behavioural tests for the compiled module surface.
+    The behavior of the built module as PowerShell sees it: the cmdlet and parameter contract,
+    and what the cmdlets decide before a request leaves the process.
 
-    Prerequisites: run build.ps1 first.
+    Run ./build.ps1 first, then the harness, which is what CI runs too:
 
-    Usage:
-    Invoke-Pester ./tests/Unit/Mgx.Behaviour.Tests.ps1 -Output Detailed
+        Import-Module ./tests/TestHarness.psm1; Invoke-TestHarness
+
+    The harness excludes the Live tag, so a clone with no Graph session passes. What a cmdlet
+    does against a real tenant is proven in tests/Live, run on its own:
+
+        Invoke-Pester -Path ./tests/Live
+
+    The one Live-tagged block left here is the sustained auth run at the bottom: it needs an
+    hour of directory traffic to cross a token boundary, which is not something tests/Live can
+    ask of anyone running the suite. Pass -IncludeLive to the harness to reach it.
 #>
 
 BeforeAll {
@@ -15,7 +24,7 @@ BeforeAll {
 }
 
 Describe 'Module Loading' {
-    It 'Should import the M365DSC.mgx module' {
+    It 'Should import Mgx module' {
         $module = Get-Module M365DSC.mgx
         $module | Should -Not -BeNullOrEmpty
         # Read expected version from manifest to avoid hardcoded values breaking on version bumps
@@ -183,20 +192,6 @@ Describe 'Expand-MgxRelation Parameter Compatibility' {
         if ($err) {
             $err.Exception.Message | Should -Not -BeLike '*ConsistencyLevel*'
         }
-    }
-
-    # R3-11: Buffer size warning at 50k items
-    It 'Should warn when buffer exceeds 50k items' -Tag 'Slow' {
-        $objects = 1..50001 | ForEach-Object { [PSCustomObject]@{id = "id-$_"} }
-        $w = @()
-        try {
-            $objects | Expand-MgxRelation '/users/{id}/manager' -As Manager `
-                -WarningVariable w 3>$null -ErrorAction Stop
-        } catch {
-            # Expected: auth error from EndProcessing. Warning fires in ProcessRecord before this.
-        }
-        $bufferWarning = $w | Where-Object { $_ -match 'buffer' -or $_ -match '50.000' }
-        $bufferWarning | Should -Not -BeNullOrEmpty
     }
 }
 
@@ -546,7 +541,7 @@ Describe 'Disable-MgxResilience Parameter Compatibility' {
 }
 
 Describe 'Get-MgxResilience Parameter Compatibility' {
-    It 'Should declare the type it actually emits' {
+    It 'Should have the OutputType its help documents' {
         $outputType = (Get-Command Get-MgxResilience).OutputType
         $outputType.Name | Should -Contain 'Mgx.Cmdlets.Models.MgxResilienceOutput'
     }
@@ -801,6 +796,10 @@ Describe 'Set-MgxOption Pipeline Parameters' {
 
     It 'Should reject -CircuitBreakerMinThroughput 0' {
         { Set-MgxOption -CircuitBreakerMinThroughput 0 } | Should -Throw
+    }
+
+    It 'Should reject -CircuitBreakerMinThroughput 1' {
+        { Set-MgxOption -CircuitBreakerMinThroughput 1 } | Should -Throw
     }
 
     It 'Should reject -RateLimitQueueLimit -1' {
@@ -1339,21 +1338,11 @@ Describe 'NormalizeSelect (via reflection)' {
     }
 }
 
-Describe 'Expand-MgxRelation Buffer Warning' {
-    It 'Source code contains 50k buffer warning guard' {
-        # The actual live test (piping 50k items) requires Graph connection and takes ~15 min
-        # due to fan-out HTTP calls. Verify the guard exists in source instead.
-        $source = Get-Content (Join-Path $PSScriptRoot '../../src/Mgx.Cmdlets/Cmdlets/Expand/ExpandMgxRelation.cs') -Raw
-        $source | Should -Match '50_000'
-        $source | Should -Match 'WriteWarning'
-        $source | Should -Match 'buffer|Buffer'
-    }
-}
-
-Describe 'HttpClient Ownership Disposal Guard' {
-    # Tests the s_ownsHttpClient guard in MgxCmdletBase.ScheduleDelayedHttpClientDispose.
-    # When s_ownsHttpClient is false (SDK fallback path), ResetHttpClient must NOT dispose
-    # the HttpClient (it belongs to the SDK). When true, it must dispose after delay.
+Describe 'HttpClient Reset Leaves A Held Client Alone' {
+    # A replaced transport is dropped, not closed. Every ResilientGraphClient built on it
+    # captured it in its constructor and keeps sending through it for as long as its
+    # enumeration runs, so closing it on a timer killed long-running cmdlets mid-stream; and a
+    # borrowed SDK client was never mgx's to close at all. ResetHttpClient must leave both.
 
     BeforeAll {
         # Ensure Mgx.Engine types are loaded (transitive dep of Mgx.Cmdlets)
@@ -1391,7 +1380,6 @@ Describe 'HttpClient Ownership Disposal Guard' {
         $script:CmdletBaseType.GetField('s_clientOptions', $script:Flags).SetValue(
             $null, $script:ShortTimeoutOptions)
 
-        # ResetHttpClient -> ScheduleDelayedHttpClientDispose checks s_ownsHttpClient
         # ResetHttpClient is public static, so use 'Static,Public' (not $script:Flags which is NonPublic)
         $script:CmdletBaseType.GetMethod('ResetHttpClient',
             [System.Reflection.BindingFlags]'Static,Public').Invoke($null, $null)
@@ -1403,7 +1391,7 @@ Describe 'HttpClient Ownership Disposal Guard' {
         $script:DisposedField.GetValue($httpClient) | Should -BeFalse
     }
 
-    It 'Should dispose HttpClient when s_ownsHttpClient is true' {
+    It 'Should NOT dispose an owned HttpClient a running cmdlet may still hold' {
         $httpClient = [System.Net.Http.HttpClient]::new()
 
         $script:CmdletBaseType.GetField('s_graphHttpClient', $script:Flags).SetValue($null, $httpClient)
@@ -1414,11 +1402,11 @@ Describe 'HttpClient Ownership Disposal Guard' {
         $script:CmdletBaseType.GetMethod('ResetHttpClient',
             [System.Reflection.BindingFlags]'Static,Public').Invoke($null, $null)
 
-        # Wait longer than TotalTimeoutSeconds (1s) to let scheduled disposal fire
+        # Longer than the TotalTimeoutSeconds (1s) the disposal used to be scheduled on
         Start-Sleep -Seconds 3
 
-        # HttpClient SHOULD be disposed (we own it)
-        $script:DisposedField.GetValue($httpClient) | Should -BeTrue
+        # Ownership says who may replace it, not how long anything still using it will live
+        $script:DisposedField.GetValue($httpClient) | Should -BeFalse
     }
 }
 
@@ -1494,3 +1482,35 @@ finally {
     }
 }
 
+# Sustained auth pipeline test. Exercises token refresh under load.
+# MSAL's AuthenticationHandler refreshes tokens proactively (5 min before expiry).
+# Azure AD tokens expire at 60-90 min, so crossing a token boundary requires ~65+ min.
+# This test validates the auth pipeline survives sustained use; manual 2+ hour runs
+# are recommended before enterprise deployment per panel review findings.
+Describe 'Sustained Auth Pipeline' -Tag 'Live', 'LongRunning' {
+    It 'Export-MgxCollection survives sustained load without auth errors' {
+        $context = Get-MgContext -ErrorAction SilentlyContinue
+        if (-not $context) {
+            Set-ItResult -Skipped -Because 'Not connected to Microsoft Graph'
+            return
+        }
+        $outFile = [System.IO.Path]::GetTempFileName() + '.jsonl'
+        $cpFile  = [System.IO.Path]::GetTempFileName() + '.json'
+        try {
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+            # Export audit logs (large collection, sustained HTTP traffic)
+            Export-MgxCollection /auditLogs/signIns -OutputFile $outFile `
+                -CheckpointPath $cpFile -All -ErrorAction Stop
+
+            $sw.Stop()
+            $lineCount = (Get-Content $outFile -Raw).Split("`n").Where({ $_ }).Count
+
+            # Should have exported records without auth failure
+            $lineCount | Should -BeGreaterThan 0
+            Write-Host "Exported $lineCount sign-in records in $([math]::Round($sw.Elapsed.TotalMinutes, 1)) minutes"
+        } finally {
+            Remove-Item $outFile, $cpFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+}

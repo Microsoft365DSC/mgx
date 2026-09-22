@@ -70,4 +70,59 @@ public class ErrorBodyShapeTests
         var ex = new GraphServiceException(HttpStatusCode.ServiceUnavailable, """{"error":404}""");
         Assert.Contains("503", ex.Message);
     }
+
+    [Fact]
+    public void Carries_the_inner_error_message()
+    {
+        var ex = new GraphServiceException(
+            HttpStatusCode.BadRequest,
+            """{"error":{"code":"","message":"The request is invalid.","innerError":{"message":"configuration.DisplayName : The DisplayName field is required.","date":"2026-09-21T19:08:59"}}}""");
+
+        Assert.Equal("configuration.DisplayName : The DisplayName field is required.", ex.InnerErrorMessage);
+        Assert.Contains("The request is invalid.", ex.Message);
+        Assert.Contains("configuration.DisplayName", ex.Message);
+    }
+
+    [Fact]
+    public void Takes_the_deepest_message_of_a_nested_inner_error()
+    {
+        var ex = new GraphServiceException(
+            HttpStatusCode.BadRequest,
+            """{"error":{"code":"BadRequest","message":"top","innerError":{"message":"middle","innerError":{"message":"deepest"}}}}""");
+
+        Assert.Equal("deepest", ex.InnerErrorMessage);
+        Assert.Contains("deepest", ex.Message);
+    }
+
+    [Fact]
+    public void Leaves_the_message_alone_when_the_inner_error_carries_no_message()
+    {
+        var ex = new GraphServiceException(
+            HttpStatusCode.BadRequest,
+            """{"error":{"code":"Request_BadRequest","message":"Invalid request","innerError":{"date":"2024-01-01T00:00:00","request-id":"12345"}}}""");
+
+        Assert.Null(ex.InnerErrorMessage);
+        Assert.StartsWith("Request_BadRequest: Invalid request", ex.Message);
+    }
+
+    [Fact]
+    public void Does_not_repeat_an_inner_error_that_matches_the_message()
+    {
+        var ex = new GraphServiceException(
+            HttpStatusCode.BadRequest,
+            """{"error":{"code":"BadRequest","message":"same text","innerError":{"message":"same text"}}}""");
+
+        Assert.Equal("same text", ex.InnerErrorMessage);
+        Assert.Equal(1, ex.Message.Split("same text").Length - 1);
+    }
+
+    [Fact]
+    public void Stops_walking_a_chain_nested_past_any_real_depth()
+    {
+        var ex = new GraphServiceException(
+            HttpStatusCode.BadRequest,
+            """{"error":{"code":"BadRequest","message":"top","innerError":{"message":"a","innerError":{"message":"b","innerError":{"message":"c","innerError":{"message":"d","innerError":{"message":"e","innerError":{"message":"f","innerError":{"message":"g","innerError":{"message":"h","innerError":{"message":"i"}}}}}}}}}}}""");
+
+        Assert.False(string.IsNullOrWhiteSpace(ex.Message));
+    }
 }

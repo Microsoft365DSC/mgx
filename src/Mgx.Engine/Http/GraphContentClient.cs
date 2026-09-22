@@ -1,3 +1,4 @@
+using Mgx.Engine.Errors;
 using System.Net;
 using System.Net.Http.Headers;
 using Polly;
@@ -5,7 +6,9 @@ using Polly.Retry;
 
 namespace Mgx.Engine.Http;
 
-/// <summary>Result of a content fetch. Owns the response: dispose it to release the connection.</summary>
+/// <summary>
+/// Result of a content fetch. Owns the response: dispose it to release the connection.
+/// </summary>
 public sealed class GraphContentResult : IDisposable
 {
     public required Stream Content { get; init; }
@@ -31,28 +34,31 @@ public sealed class GraphContentResult : IDisposable
 /// <summary>
 /// The two-hop content path behind Get-MgxContent.
 ///
-/// Hop one is the authenticated Graph request through ResilientGraphClient, with the full
-/// pipeline, pacer and bucket lease. A 2xx with a body is content Graph served directly. A
-/// redirect is the drive-item case, and its Location is validated against DownloadUrlValidator
-/// before hop two touches it.
+/// Hop 1 (Graph, authenticated) goes through ResilientGraphClient.SendAsync - full pipeline,
+/// pacer, bucket lease. A 2xx with a body is content served directly by Graph (attachments,
+/// photos). A redirect is the drive-item case: the Location is a pre-authenticated URL on a
+/// download host, validated against DownloadUrlValidator before hop 2 touches it.
 ///
-/// Hop two fetches from the download host through a singleton HttpClient with no auth handler,
-/// so the bearer token never reaches that host. AllowAutoRedirect is off and every Location is
-/// re-validated over at most three manual redirects, since an open redirect on an allowlisted
-/// host must not bypass the validator. Its own small retry pipeline handles 429 and 5xx with
-/// Retry-After. It has no circuit breaker, so a CDN outage cannot poison the Graph circuit, and
-/// no bucket charge, since the request budget is Graph-side. On a 401 or 403 the caller re-runs
-/// hop one once for a fresh URL.
+/// Hop 2 (download host, token-free) uses a static singleton HttpClient with NO auth handler:
+/// the bearer must never reach the download host. AllowAutoRedirect is off and redirects are
+/// followed manually (max 3), re-validating every Location - an open redirect on an
+/// allowlisted host must not silently bypass the validator. Its own small retry pipeline
+/// handles 429/5xx with Retry-After; deliberately NO circuit breaker (a CDN outage must not
+/// poison the Graph circuit) and NO bucket charge (the request budget is Graph-side).
+/// On 401/403 (expired pre-auth URL) the caller re-runs hop 1 once for a fresh URL.
 ///
-/// The 302 is only observable because the owned clean HttpClient sets AllowAutoRedirect to
-/// false. On a transport that auto-follows, the bytes would arrive as a 2xx from an unvalidated
-/// host, so any 2xx whose request URI left the Graph host is rejected here and the cmdlet layer
-/// refuses non-owned transports before calling in.
+/// Transport precondition (fail closed): the 302 is only observable because the owned clean
+/// HttpClient sets AllowAutoRedirect=false. On a transport that auto-follows (the SDK
+/// fallback client ships Kiota's RedirectHandler; injected transports are unknown), the
+/// bytes would arrive as a 2xx from a host mgx never validated - so any 2xx whose request
+/// URI left the Graph host is rejected here, and the cmdlet layer refuses non-owned
+/// transports outright before calling in.
 /// </summary>
 public static class GraphContentClient
 {
     private const int MaxManualRedirects = 3;
 
+    /// <summary>Statuses hop 1 treats as "go fetch from the download host".</summary>
     private static bool IsRedirect(HttpStatusCode status) =>
         status is HttpStatusCode.Moved or HttpStatusCode.Found
             or HttpStatusCode.SeeOther or HttpStatusCode.TemporaryRedirect
@@ -62,7 +68,7 @@ public static class GraphContentClient
     /// (redirects, 429/5xx, auth-expiry) can be mocked. Never set from production code.</summary>
     internal static HttpClient? DownloadClientForTests;
 
-    // Token-free singleton for hop 2. No auth handler by construction. Decompression stays
+    // Token-free singleton for hop 2. No auth handler by construction; decompression stays
     // off so ranged reads and Content-Length are byte-exact.
     private static readonly HttpClient s_downloadClient = new(new SocketsHttpHandler
     {
@@ -72,34 +78,32 @@ public static class GraphContentClient
         ConnectTimeout = TransportDefaults.ConnectTimeout
     })
     {
-        // Covers until response headers (ResponseHeadersRead). The body copy is bounded by
+        // Covers until response headers (ResponseHeadersRead); the body copy is bounded by
         // the caller's idle timeout, not this.
         Timeout = TimeSpan.FromSeconds(100)
     };
 
-    // Hop two retries three times with exponential backoff and jitter on 429, 5xx and transport
-    // errors, honoring Retry-After clamped to two minutes
+    // Small reactive pipeline for hop 2: retry 3 with exponential backoff + jitter on
+    // 429/5xx/transport errors, honoring Retry-After clamped to two minutes.
     /// <summary>
-    /// Delay for one download retry, from Retry-After, which has two legal forms: delta-seconds
-    /// and an HTTP-date. A date already in the past yields no delay rather than a negative one,
-    /// and both forms are capped at 120 seconds. Polly MaxDelay does not clamp a value returned
-    /// from a DelayGenerator, so that cap is the only bound on the sleep.
-    /// Internal rather than inlined so a test can reach it without driving a real 429 through
-    /// GetContentAsync.
+    /// Delay for one download retry, from Retry-After. The header has two legal forms:
+    /// delta-seconds and an HTTP-date. Honoring only Delta silently fell back to plain
+    /// exponential backoff whenever a download host chose the date form - and the main pipeline
+    /// already handles both, so this path was the odd one out. A date already in the past yields
+    /// no delay rather than a negative one, and both forms are capped at 120s.
+    ///
+    /// Internal rather than inlined into the DelayGenerator lambda because the pipeline is a
+    /// private static field with no seam: a test could only reach the lambda by driving a real
+    /// 429 through GetContentAsync. The test that covers this used to hold its own copy of the
+    /// logic instead, which passed with the whole feature deleted from the product.
+    /// Polly's MaxDelay does NOT clamp a value returned from a DelayGenerator, so the cap here
+    /// is the only bound on the sleep.
     /// </summary>
     internal static TimeSpan? ResolveRetryDelay(RetryConditionHeaderValue? retryAfter)
-    {
-        var cap = TimeSpan.FromSeconds(120);
-        if (retryAfter?.Delta is { } delta)
-            return delta > cap ? cap : delta;
-        if (retryAfter?.Date is { } date)
-        {
-            var delay = date - DateTimeOffset.UtcNow;
-            if (delay > TimeSpan.Zero)
-                return delay > cap ? cap : delay;
-        }
-        return null;
-    }
+        // The 120s cap is hardcoded because this pipeline is a type-initialized static and
+        // cannot see ResilientGraphClientOptions; making it options-driven is a redesign of
+        // this class, not a parameter change.
+        => RetryAfterPolicy.Resolve(retryAfter, TimeSpan.FromSeconds(120));
 
     private static readonly ResiliencePipeline<HttpResponseMessage> s_downloadPipeline =
         new ResiliencePipelineBuilder<HttpResponseMessage>()
@@ -112,13 +116,13 @@ public static class GraphContentClient
                 MaxDelay = TimeSpan.FromSeconds(120),
                 ShouldHandle = args =>
                 {
-                    if (args.Outcome.Result?.StatusCode is (HttpStatusCode)429
-                        or HttpStatusCode.InternalServerError
-                        or HttpStatusCode.BadGateway
-                        or HttpStatusCode.ServiceUnavailable
-                        or HttpStatusCode.GatewayTimeout)
-                        return ValueTask.FromResult(true);
-                    return ValueTask.FromResult(args.Outcome.Exception is HttpRequestException);
+                    var info = args.Outcome.Result is { } response
+                        ? MgxErrorClassifier.Classify(response)
+                        : args.Outcome.Exception is { } ex
+                            ? MgxErrorClassifier.Classify(ex, cancellationRequested: false)
+                            : new MgxErrorInfo(MgxErrorClass.Permanent, 0);
+                    return ValueTask.FromResult(
+                        MgxErrorPolicy.ShouldRetryDownload(info, args.Outcome.Exception));
                 },
                 DelayGenerator = args =>
                     ValueTask.FromResult(ResolveRetryDelay(args.Outcome.Result?.Headers.RetryAfter)),
@@ -142,9 +146,12 @@ public static class GraphContentClient
         CancellationToken cancellationToken)
     {
         var graphHost = new Uri(requestUri).Host;
+        // Preserve case-insensitivity: Dictionary(IDictionary) silently swaps in the
+        // ordinal comparer, which made the hop-2 conditional forward and the
+        // client-request-id suppression casing-sensitive on this path only.
         var requestHeaders = headers != null
-            ? new Dictionary<string, string>(headers)
-            : new Dictionary<string, string>();
+            ? new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (range != null)
             requestHeaders["Range"] = range.ToString();
 
@@ -190,7 +197,8 @@ public static class GraphContentClient
                         $"Download host '{TryGetHost(absolute)}' is not on the allowed list "
                         + "(SharePoint/OneDrive download hosts only). Refusing to fetch content from it.");
 
-                var hop2 = await FetchFromDownloadHostAsync(validated, range, cancellationToken);
+                var hop2 = await FetchFromDownloadHostAsync(validated, range, cancellationToken,
+                    FilterDownloadHeaders(requestHeaders));
 
                 if (hop2.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
                     && authAttempt == 0)
@@ -220,7 +228,7 @@ public static class GraphContentClient
     /// <summary>
     /// Fetch directly from a pre-authenticated download URL (a piped driveItem's
     /// @microsoft.graph.downloadUrl), skipping hop 1. The caller MUST have validated the URL
-    /// through DownloadUrlValidator first. This method validates again and throws otherwise.
+    /// through DownloadUrlValidator first; this method validates again and throws otherwise.
     /// No auth refresh is possible on this path - the URL is short-lived, and a 401/403 means
     /// the item must be re-fetched for a fresh one.
     /// </summary>
@@ -228,14 +236,16 @@ public static class GraphContentClient
         string downloadUrl,
         RangeHeaderValue? range,
         TimeSpan bodyReadTimeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Dictionary<string, string>? headers = null)
     {
         var validated = DownloadUrlValidator.Validate(downloadUrl)
             ?? throw new InvalidOperationException(
                 $"Download host '{TryGetHost(downloadUrl)}' is not on the allowed list "
                 + "(SharePoint/OneDrive download hosts only). Refusing to fetch content from it.");
 
-        var response = await FetchFromDownloadHostAsync(validated, range, cancellationToken);
+        var response = await FetchFromDownloadHostAsync(validated, range, cancellationToken,
+            FilterDownloadHeaders(headers));
         if (response.IsSuccessStatusCode)
             return await WrapAsync(response, fromDownloadHost: true, bodyReadTimeout, cancellationToken);
 
@@ -245,8 +255,38 @@ public static class GraphContentClient
         throw new Models.GraphServiceException(status, body);
     }
 
+    /// <summary>
+    /// The caller headers that cross to the download host: the READ-conditional family
+    /// plus Accept. Everything else stays on hop 1 - the download host is token-free by
+    /// construction, and correlation or auth headers must never reach it. If-Match and
+    /// If-Unmodified-Since stay behind too: they are write validators, and a Graph etag
+    /// forwarded to a SharePoint blob host cannot match - it would turn a shared
+    /// -Headers splat into a 412 on every download.
+    /// </summary>
+    private static readonly string[] s_forwardableDownloadHeaders =
+        ["If-None-Match", "If-Modified-Since", "If-Range", "Accept"];
+
+    private static Dictionary<string, string>? FilterDownloadHeaders(Dictionary<string, string>? headers)
+    {
+        if (headers == null) return null;
+        Dictionary<string, string>? filtered = null;
+        foreach (var (key, value) in headers)
+        {
+            // Compare by name, not by the source dictionary's comparer - a caller-built
+            // dictionary may be case-sensitive, and header names are not.
+            if (s_forwardableDownloadHeaders.Any(n => string.Equals(n, key, StringComparison.OrdinalIgnoreCase)))
+                (filtered ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))[key] = value;
+        }
+        return filtered;
+    }
+
+    /// <summary>
+    /// Token-free fetch with manual, re-validated redirects. Every hop must pass the
+    /// allowlist: an open redirect on an allowlisted host is not a pass.
+    /// </summary>
     private static async Task<HttpResponseMessage> FetchFromDownloadHostAsync(
-        string url, RangeHeaderValue? range, CancellationToken cancellationToken)
+        string url, RangeHeaderValue? range, CancellationToken cancellationToken,
+        Dictionary<string, string>? conditionalHeaders = null)
     {
         var current = url;
         for (var redirects = 0; ; redirects++)
@@ -262,6 +302,9 @@ public static class GraphContentClient
                         var request = new HttpRequestMessage(HttpMethod.Get, target);
                         if (range != null)
                             request.Headers.Range = range;
+                        if (conditionalHeaders != null)
+                            foreach (var (name, value) in conditionalHeaders)
+                                request.Headers.TryAddWithoutValidation(name, value);
                         return await (DownloadClientForTests ?? s_downloadClient).SendAsync(
                             request, HttpCompletionOption.ResponseHeadersRead, ctx.CancellationToken);
                     },
@@ -297,7 +340,7 @@ public static class GraphContentClient
         HttpResponseMessage response, bool fromDownloadHost, TimeSpan bodyReadTimeout,
         CancellationToken cancellationToken)
     {
-        // ResponseHeadersRead: opening the stream is cheap. The caller copies with an idle
+        // ResponseHeadersRead: opening the stream is cheap; the caller copies with an idle
         // timeout (CopyWithIdleTimeoutAsync) so a stalled body cannot hang forever.
         using var bodyCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         bodyCts.CancelAfter(bodyReadTimeout);
@@ -360,7 +403,7 @@ public static class GraphContentClient
 
         // Discard the bytes before the requested offset. Only reachable when a ranged request
         // was answered with 200 and the whole body: the server ignored the offset, so it has to
-        // be honored here instead. Without this, -Offset 1MB -Length 64KB returned bytes
+        // be honoured here instead. Without this, -Offset 1MB -Length 64KB returned bytes
         // 0..65535 and reported success - the wrong bytes, silently, which is worse than an
         // error because nothing downstream can tell.
         long skipped = 0;
@@ -402,6 +445,11 @@ public static class GraphContentClient
         return total;
     }
 
+    /// <summary>
+    /// One read, bounded by the idle timeout. A stalled body must not hang forever, and the
+    /// timeout applies per read rather than to the transfer as a whole so a slow-but-progressing
+    /// download is not killed.
+    /// </summary>
     private static async Task<int> ReadWithIdleTimeoutAsync(
         Stream source, byte[] buffer, int count, TimeSpan idleTimeout,
         CancellationToken cancellationToken)

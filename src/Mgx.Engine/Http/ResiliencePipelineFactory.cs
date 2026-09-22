@@ -1,3 +1,4 @@
+using Mgx.Engine.Errors;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Threading.RateLimiting;
@@ -5,6 +6,8 @@ using Polly;
 using Polly.CircuitBreaker;
 using Polly.Retry;
 using Polly.Timeout;
+
+
 
 namespace Mgx.Engine.Http;
 
@@ -23,7 +26,7 @@ public static class ResiliencePipelineFactory
 
     /// <summary>
     /// Property key for passing idempotency info into the Polly retry predicate.
-    /// POST is the only non-idempotent Graph method. It only retries on 429.
+    /// POST is the only non-idempotent Graph method; it only retries on 429.
     /// </summary>
     internal static readonly ResiliencePropertyKey<bool> IsIdempotentKey = new("IsIdempotent");
 
@@ -35,8 +38,18 @@ public static class ResiliencePipelineFactory
     internal static readonly ResiliencePropertyKey<Action<string>?> VerboseWriterKey = new("VerboseWriter");
 
     /// <summary>
-    /// Get or create a shared resilience pipeline and rate limiter, rebuilding whenever the
-    /// options instance changes.
+    /// Property key for a caller's stop signal. Once canceled, no further attempt is decided
+    /// on for this request. It deliberately does not cancel the request: the attempt in flight
+    /// finishes and its answer is returned, because that answer is the only record of what the
+    /// server did with it. What stops is the decision to send another one.
+    /// </summary>
+    internal static readonly ResiliencePropertyKey<CancellationToken> StopRetriesKey = new("StopRetries");
+
+    /// <summary>
+    /// Get or create a shared resilience pipeline and rate limiter.
+    /// Rebuilds when options change (detected by reference equality, since
+    /// Set-MgxOption creates a new ResilientGraphClientOptions each time).
+    /// Old rate limiters are disposed after a delay to avoid racing with in-flight clients.
     /// </summary>
     public static (ResiliencePipeline<HttpResponseMessage> Pipeline, TokenBucketRateLimiter? RateLimiter)
         GetOrCreate(ResilientGraphClientOptions options)
@@ -46,8 +59,21 @@ public static class ResiliencePipelineFactory
             if (s_pipeline != null && ReferenceEquals(s_cachedOptions, options))
                 return (s_pipeline, s_rateLimiter);
 
-            // The retired limiter is never disposed because in-flight clients hold it as a
-            // readonly field for as long as their request runs
+            // Schedule delayed disposal of the old rate limiter. It may still be
+            // referenced by in-flight ResilientGraphClient instances, so we wait
+            // TotalTimeoutSeconds to ensure all in-flight requests have completed.
+            // Not disposed. The limiter is captured as a readonly field by every
+            // ResilientGraphClient already built from it, and by the handler
+            // Enable-MgxResilience injects into the SDK - and that handler is not rebuilt when
+            // options change. Disposing on a timer therefore broke live sessions: any
+            // Set-MgxOption call left every SDK cmdlet throwing "Cannot access a disposed
+            // object. Object name: 'TokenBucketRateLimiter'" once the delay elapsed, recoverable
+            // only by Disable-MgxResilience; Enable-MgxResilience.
+            //
+            // The delay was TotalTimeoutSeconds - a per-REQUEST timeout used as a resource
+            // lifetime. No such bound is correct: a client may hold its limiter for a multi-hour
+            // export. Dropping the reference is enough; the limiter owns no unmanaged handle and
+            // its replenishment timer is rooted only by the limiter itself.
 
             TokenBucketRateLimiter? rateLimiter = null;
             if (!options.NoRateLimit)
@@ -67,8 +93,8 @@ public static class ResiliencePipelineFactory
             s_rateLimiter = rateLimiter;
             s_cachedOptions = options;
 
-            // Every client build passes through here, so pacing configuration applied here
-            // reaches the pacer on the next invocation
+            // The chokepoint every client build passes through: apply pacing configuration
+            // here so Set-MgxOption changes reach the pacer on the next invocation.
             AdaptiveRequestPacer.Configure(options);
 
             return (s_pipeline, rateLimiter);
@@ -84,21 +110,34 @@ public static class ResiliencePipelineFactory
         lock (s_lock)
         {
             s_pipeline = null;
+            // Dispose after delay: in-flight clients may still reference the old limiter.
+            // Default 300s covers the maximum total timeout window.
+            // Not disposed, for the reason documented in GetOrCreate.
             s_rateLimiter = null;
             s_cachedOptions = null;
-            // Learned pacing state describes the old tenant, so clear it with the breaker history
+            // Learned pacing state describes the old tenant; clear it with the CB history.
             AdaptiveRequestPacer.Reset();
-            // GraphBatchClient keeps its own AIMD state in separate statics, so it has to be
-            // cleared too or a fresh credential starts at the previous tenant learned rate
+            // GraphBatchClient keeps its own AIMD state in separate statics, so clearing the
+            // request pacer alone left the batch pacer describing the previous tenant: a fresh
+            // credential started at the throttled item rate learned elsewhere, and its first
+            // batch was additionally delayed by the old tenant's completion timestamp.
             GraphBatchClient.ResetPacingState();
         }
     }
+
+    /// <summary>
+    /// Disposes a rate limiter after a delay. TokenBucketRateLimiter holds an internal
+    /// Timer (via AutoReplenishment) that acts as a GC root. Immediate disposal would
+    /// cause ObjectDisposedException in in-flight clients, so we wait for the total
+    /// timeout window to expire before disposing.
+    /// </summary>
 
     private static ResiliencePipeline<HttpResponseMessage> BuildPipeline(ResilientGraphClientOptions options)
     {
         var maxRetryAfterCap = options.MaxRetryAfterSeconds;
 
         return new ResiliencePipelineBuilder<HttpResponseMessage>()
+            // Total timeout
             .AddTimeout(TimeSpan.FromSeconds(options.TotalTimeoutSeconds))
             // Retry
             .AddRetry(new RetryStrategyOptions<HttpResponseMessage>
@@ -110,63 +149,32 @@ public static class ResiliencePipelineFactory
                 MaxDelay = TimeSpan.FromSeconds(maxRetryAfterCap),
                 ShouldHandle = args =>
                 {
-                    // 429 is safe to retry for every method, including POST
-                    if (args.Outcome.Result?.StatusCode == (HttpStatusCode)429)
-                        return ValueTask.FromResult(true);
-
-                    // Non-idempotent methods retry only on 429, since a 5xx may mean the request
-                    // was partially processed
-                    var isIdempotent = args.Context.Properties.GetValue(IsIdempotentKey, true);
-                    if (!isIdempotent)
+                    // The caller has stopped sending. Asked before the classification because
+                    // it is not about this outcome: whatever the server said, the run this
+                    // request belongs to is not sending anything else.
+                    if (args.Context.Properties.GetValue(StopRetriesKey, default).IsCancellationRequested)
                         return ValueTask.FromResult(false);
 
-                    if (args.Outcome.Result?.StatusCode is HttpStatusCode.InternalServerError
-                        or HttpStatusCode.BadGateway
-                        or HttpStatusCode.ServiceUnavailable
-                        or HttpStatusCode.GatewayTimeout
-                        or HttpStatusCode.RequestTimeout)
-                        return ValueTask.FromResult(true);
-
-                    if (args.Outcome.Exception is HttpRequestException)
-                        return ValueTask.FromResult(true);
-
-                    // The Polly attempt timeout throws TimeoutRejectedException, so a
-                    // TaskCanceledException here is either the user or the HttpClient timeout
-                    if (args.Outcome.Exception is TaskCanceledException &&
-                        !args.Context.CancellationToken.IsCancellationRequested)
-                        return ValueTask.FromResult(true);
-
-                    // Idempotent methods retry the per-attempt timeout, which matters under
-                    // Enable-MgxResilience where the SDK retry handler may sleep a Retry-After
-                    // longer than AttemptTimeoutSeconds. TotalTimeout still bounds the operation
-                    if (args.Outcome.Exception is TimeoutRejectedException)
-                        return ValueTask.FromResult(isIdempotent);
-
-                    return ValueTask.FromResult(false);
+                    // Classification and the retry decision live in Errors/, shared with the
+                    // batch client and the download pipeline; ErrorPolicyParityTests holds
+                    // them to the decisions this predicate used to make inline. Per-attempt
+                    // timeouts (TimeoutRejectedException) retry so the Enable-MgxResilience
+                    // path survives the SDK honoring a Retry-After longer than
+                    // AttemptTimeoutSeconds; the outer TotalTimeout still bounds the whole.
+                    var isIdempotent = args.Context.Properties.GetValue(IsIdempotentKey, true);
+                    var info = args.Outcome.Result is { } response
+                        ? MgxErrorClassifier.Classify(response)
+                        : args.Outcome.Exception is { } ex
+                            ? MgxErrorClassifier.Classify(ex, args.Context.CancellationToken.IsCancellationRequested)
+                            : new MgxErrorInfo(MgxErrorClass.Permanent, 0);
+                    return ValueTask.FromResult(MgxErrorPolicy.ShouldRetry(info.Class, isIdempotent));
                 },
                 DelayGenerator = args =>
-                {
-                    // Honor the Retry-After header
-                    if (args.Outcome.Result?.Headers.RetryAfter is RetryConditionHeaderValue retryAfter)
-                    {
-                        if (retryAfter.Delta.HasValue)
-                        {
-                            var delay = retryAfter.Delta.Value;
-                            var cap = TimeSpan.FromSeconds(maxRetryAfterCap);
-                            return ValueTask.FromResult<TimeSpan?>(delay > cap ? cap : delay);
-                        }
-                        if (retryAfter.Date.HasValue)
-                        {
-                            var delay = retryAfter.Date.Value - DateTimeOffset.UtcNow;
-                            if (delay > TimeSpan.Zero)
-                            {
-                                var cap = TimeSpan.FromSeconds(maxRetryAfterCap);
-                                return ValueTask.FromResult<TimeSpan?>(delay > cap ? cap : delay);
-                            }
-                        }
-                    }
-                    return ValueTask.FromResult<TimeSpan?>(null);
-                },
+                    // Respect Retry-After from the service; null falls back to the
+                    // exponential backoff configured above.
+                    ValueTask.FromResult(RetryAfterPolicy.Resolve(
+                        args.Outcome.Result?.Headers.RetryAfter,
+                        TimeSpan.FromSeconds(maxRetryAfterCap))),
                 OnRetry = args =>
                 {
                     var response = args.Outcome.Result;
@@ -223,28 +231,25 @@ public static class ResiliencePipelineFactory
                     return default;
                 }
             })
-            // Circuit breaker (5xx, not 429 or 408)
-            // 408 excluded: it's a client-perceived timeout, not a server-side failure indicator.
-            // Including it would cause proxy timeouts to trip the circuit breaker incorrectly.
+            // Circuit breaker. What counts as a circuit failure - and why 429 and 408
+            // deliberately do not - lives in MgxErrorPolicy.CountsAsCircuitFailure,
+            // beside the retry policy it diverges from.
             .AddCircuitBreaker(new CircuitBreakerStrategyOptions<HttpResponseMessage>
             {
                 FailureRatio = options.CircuitBreakerFailureRatio,
                 SamplingDuration = TimeSpan.FromSeconds(options.CircuitBreakerSamplingDurationSeconds),
                 MinimumThroughput = options.CircuitBreakerMinThroughput,
                 BreakDuration = TimeSpan.FromSeconds(options.CircuitBreakerDurationSeconds),
-                ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
-                    .HandleResult(r => r.StatusCode == HttpStatusCode.InternalServerError)
-                    .HandleResult(r => r.StatusCode == HttpStatusCode.BadGateway)
-                    .HandleResult(r => r.StatusCode == HttpStatusCode.ServiceUnavailable)
-                    .HandleResult(r => r.StatusCode == HttpStatusCode.GatewayTimeout)
-                    .Handle<HttpRequestException>()
-                    // Exclude user cancellation (Ctrl+C) from circuit breaker failure counting.
-                    // Only count non-user TaskCanceledException (e.g., HttpClient timeout).
-                    .Handle<TaskCanceledException>(e => !e.CancellationToken.IsCancellationRequested)
-                    // Count per-attempt timeouts as failures. Without this, repeated
-                    // timeouts (e.g., downstream hung) never trip the circuit breaker,
-                    // wasting MaxRetryAttempts * AttemptTimeoutSeconds before giving up.
-                    .Handle<TimeoutRejectedException>(),
+                ShouldHandle = args =>
+                {
+                    var info = args.Outcome.Result is { } response
+                        ? MgxErrorClassifier.Classify(response)
+                        : args.Outcome.Exception is { } ex and not BrokenCircuitException
+                            ? MgxErrorClassifier.Classify(ex,
+                                (ex as OperationCanceledException)?.CancellationToken.IsCancellationRequested ?? false)
+                            : new MgxErrorInfo(MgxErrorClass.Permanent, 0);
+                    return ValueTask.FromResult(MgxErrorPolicy.CountsAsCircuitFailure(info));
+                },
                 OnOpened = _ =>
                 {
                     MgxTelemetryCollector.Current.RecordCircuitBreakerTrip();
