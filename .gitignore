@@ -19,11 +19,6 @@ Modules/M365DSC.mgx/*.json
 Modules/M365DSC.mgx/Dependencies/
 Modules/M365DSC.mgx/.build-hash
 
-# The csproj stages an IDE build into module/ as well. Only the manifest there is source.
-module/*.dll
-module/*.pdb
-module/*.json
-module/Dependencies/
 
 # Test output
 TestResults/

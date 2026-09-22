@@ -159,7 +159,7 @@ $resultsDir = Join-Path $PSScriptRoot 'results'
 if (-not (Test-Path $resultsDir)) { New-Item -ItemType Directory -Path $resultsDir -Force | Out-Null }
 $rowsPath = Join-Path $resultsDir '18-spo-latency-clamp.rows.jsonl'
 
-$modulePath = Join-Path $PSScriptRoot '../../module/mgx.psd1'
+$modulePath = Join-Path $PSScriptRoot '../../Modules/M365DSC.mgx/M365DSC.mgx.psd1'
 if (-not (Test-Path $modulePath)) { $modulePath = 'Mgx' }
 $startedAt = Get-Date
 $deadline = [datetime]::UtcNow.AddMinutes($Minutes)

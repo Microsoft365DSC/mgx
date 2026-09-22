@@ -1,4 +1,4 @@
-#Requires -Modules Pester
+﻿#Requires -Modules Pester
 
 <#
     Invoke-TestHarness's own result contract, from tests/TestHarness.psm1: a container that
@@ -29,12 +29,12 @@ param(
 Import-Module -Name $HarnessModule -Force
 $warnings = $null
 $result = Invoke-TestHarness -TestPath $TestPath -TestResultsFile $TestResultsFile `
-    -IgnoreCodeCoverage -WarningVariable warnings -WarningAction SilentlyContinue
+    -IgnoreCodeCoverage -SkipDotNetTests -WarningVariable warnings -WarningAction SilentlyContinue
 [pscustomobject]@{
-    Result                = $result.Result
-    FailedCount           = $result.FailedCount
-    FailedContainersCount = $result.FailedContainersCount
-    PassedCount           = $result.PassedCount
+    Result                = $result.Pester.Result
+    FailedCount           = $result.Pester.FailedCount
+    FailedContainersCount = $result.Pester.FailedContainersCount
+    PassedCount           = $result.Pester.PassedCount
     Warnings              = @($warnings | ForEach-Object { $_.ToString() })
 } | ConvertTo-Json -Depth 5 | Set-Content -Path $ResultFile -Encoding utf8
 '@

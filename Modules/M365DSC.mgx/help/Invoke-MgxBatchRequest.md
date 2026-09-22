@@ -1,4 +1,4 @@
----
+﻿---
 external help file: Mgx.Cmdlets.dll-Help.xml
 Module Name: Mgx
 online version: https://github.com/gromedev/mgx/blob/main/module/help/Invoke-MgxBatchRequest.md
@@ -15,6 +15,7 @@ Bundle multiple Graph API requests into /$batch calls.
 ```
 Invoke-MgxBatchRequest [-Uri] <Object[]> [-Method <String>] [-Body <Object>] [-ConsistencyLevel <String>]
  [-Headers <Hashtable>] [-ThrottlePriority <String>] [-ApiVersion <String>] [-DeadLetterPath <String>]
+ [-FollowNextLink] [-MaxPage <Int32>]
  [-ProgressAction <ActionPreference>] [-WhatIf] [-Confirm] [<CommonParameters>]
 ```
 
@@ -294,6 +295,36 @@ Aliases: wi
 Required: False
 Position: Named
 Default value: None
+Accept pipeline input: False
+Accept wildcard characters: False
+```
+
+### -FollowNextLink
+Drain `@odata.nextLink` in sub-response bodies, merging the pages into each result. Off by default, where a sub-response that carries a next link is returned with the items of its first page and the link beside them. Follow-up pages are submitted as further batches, so N partial collections drain in ceil(N/20) requests per page rather than N.
+
+```yaml
+Type: SwitchParameter
+Parameter Sets: (All)
+Aliases:
+
+Required: False
+Position: Named
+Default value: None
+Accept pipeline input: False
+Accept wildcard characters: False
+```
+
+### -MaxPage
+Ceiling on the pages drained per sub-request when -FollowNextLink is on. 0, the default, is unlimited. A sub-request stopped at the ceiling with more to read is reported as such rather than returned as though it were whole.
+
+```yaml
+Type: Int32
+Parameter Sets: (All)
+Aliases:
+
+Required: False
+Position: Named
+Default value: 0
 Accept pipeline input: False
 Accept wildcard characters: False
 ```

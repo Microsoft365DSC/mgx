@@ -2084,6 +2084,29 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
           </dev:type>
           <dev:defaultValue>False</dev:defaultValue>
         </command:parameter>
+        <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
+          <maml:name>FollowNextLink</maml:name>
+          <maml:description>
+            <maml:para>Drain `@odata.nextLink` in sub-response bodies, merging the pages into each result. Off by default, where a sub-response that carries a next link is returned with the items of its first page and the link beside them. Follow-up pages are submitted as further batches, so N partial collections drain in ceil(N/20) requests per page rather than N.</maml:para>
+          </maml:description>
+          <dev:type>
+            <maml:name>SwitchParameter</maml:name>
+            <maml:uri />
+          </dev:type>
+          <dev:defaultValue>False</dev:defaultValue>
+        </command:parameter>
+        <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
+          <maml:name>MaxPage</maml:name>
+          <maml:description>
+            <maml:para>Ceiling on the pages drained per sub-request when -FollowNextLink is on. 0, the default, is unlimited. A sub-request stopped at the ceiling with more to read is reported as such rather than returned as though it were whole.</maml:para>
+          </maml:description>
+          <command:parameterValue required="true" variableLength="false">Int32</command:parameterValue>
+          <dev:type>
+            <maml:name>Int32</maml:name>
+            <maml:uri />
+          </dev:type>
+          <dev:defaultValue>0</dev:defaultValue>
+        </command:parameter>
         <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="proga">
           <maml:name>ProgressAction</maml:name>
           <maml:description>
@@ -2226,6 +2249,30 @@ $report | Expand-MgxRelation -Uri '/users/{id}/licenseDetails' -As Licenses -IdP
           <maml:uri />
         </dev:type>
         <dev:defaultValue>False</dev:defaultValue>
+      </command:parameter>
+      <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
+        <maml:name>FollowNextLink</maml:name>
+        <maml:description>
+          <maml:para>Drain `@odata.nextLink` in sub-response bodies, merging the pages into each result. Off by default, where a sub-response that carries a next link is returned with the items of its first page and the link beside them. Follow-up pages are submitted as further batches, so N partial collections drain in ceil(N/20) requests per page rather than N.</maml:para>
+        </maml:description>
+        <command:parameterValue required="false" variableLength="false">SwitchParameter</command:parameterValue>
+        <dev:type>
+          <maml:name>SwitchParameter</maml:name>
+          <maml:uri />
+        </dev:type>
+        <dev:defaultValue>False</dev:defaultValue>
+      </command:parameter>
+      <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="none">
+        <maml:name>MaxPage</maml:name>
+        <maml:description>
+          <maml:para>Ceiling on the pages drained per sub-request when -FollowNextLink is on. 0, the default, is unlimited. A sub-request stopped at the ceiling with more to read is reported as such rather than returned as though it were whole.</maml:para>
+        </maml:description>
+        <command:parameterValue required="true" variableLength="false">Int32</command:parameterValue>
+        <dev:type>
+          <maml:name>Int32</maml:name>
+          <maml:uri />
+        </dev:type>
+        <dev:defaultValue>0</dev:defaultValue>
       </command:parameter>
       <command:parameter required="false" variableLength="true" globbing="false" pipelineInput="False" position="named" aliases="proga">
         <maml:name>ProgressAction</maml:name>

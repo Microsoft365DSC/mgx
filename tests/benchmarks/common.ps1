@@ -188,7 +188,7 @@ function Import-MgxLocal {
     # different-versioned Users then fails with "assembly with same name already loaded".
     if (-not (Get-Module Microsoft.Graph.Users)) { Import-Module Microsoft.Graph.Users }
     # Local build first (repo checkout), gallery module as fallback.
-    $local = Join-Path $PSScriptRoot '../../module/mgx.psd1'
+    $local = Join-Path $PSScriptRoot '../../Modules/M365DSC.mgx/M365DSC.mgx.psd1'
     if (Test-Path $local) { Import-Module $local -Force }
     else { Import-Module Mgx -Force }
 }
@@ -908,7 +908,7 @@ function Write-BenchResult {
     $stamp = $Identity
     if (-not $PSBoundParameters.ContainsKey('Identity')) {
         $stamp = [pscustomobject]@{
-            MgxVersion                  = (Get-Module Mgx -ErrorAction SilentlyContinue)?.Version?.ToString()
+            MgxVersion                  = (Get-Module M365DSC.mgx -ErrorAction SilentlyContinue)?.Version?.ToString()
             SdkVersion                  = (Get-Module Microsoft.Graph.Authentication -ErrorAction SilentlyContinue)?.Version?.ToString()
             TenantId                    = $fact.TenantId
             DirectoryObjectCount        = $fact.DirectoryObjectCount

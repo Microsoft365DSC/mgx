@@ -256,7 +256,7 @@ Describe 'Write-BenchResult -Identity' {
     It 'reads this process with no identity supplied' {
         $entry = Write-BenchProbe -Name 'identity-absent' -Session -UserCount 19
 
-        $entry.MgxVersion | Should -Be (Get-Module Mgx -ErrorAction SilentlyContinue)?.Version?.ToString()
+        $entry.MgxVersion | Should -Be (Get-Module M365DSC.mgx -ErrorAction SilentlyContinue)?.Version?.ToString()
         $entry.TenantId | Should -Be $script:FakeTenantId
         $entry.DirectoryObjectCount | Should -Be 19
         $entry.DocumentedBudgetRuPerSecond | Should -Be 350

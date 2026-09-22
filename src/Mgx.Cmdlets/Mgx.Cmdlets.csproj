@@ -59,7 +59,7 @@
 
   <Target Name="StageModuleOutput" AfterTargets="Build" DependsOnTargets="CopyPipelinesDependency" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
-      <ModuleRoot Condition="'$(ModuleRoot)' == ''">$(MSBuildThisFileDirectory)../../module</ModuleRoot>
+      <ModuleRoot Condition="'$(ModuleRoot)' == ''">$(MSBuildThisFileDirectory)../../Modules/M365DSC.mgx</ModuleRoot>
       <DepsDir>$(ModuleRoot)/Dependencies</DepsDir>
     </PropertyGroup>
 

@@ -16,6 +16,7 @@ General-purpose resilient client for any Microsoft Graph endpoint.
 ```
 Invoke-MgxRequest [-Uri] <String> [-Method <String>] [-Body <Object>] [-Property <String[]>]
  [-ExpandProperty <String[]>] [-ConsistencyLevel <String>] [-Headers <Hashtable>] [-ApiVersion <String>] [-Raw]
+ [-Envelope]
  [-Filter <String>] [-Sort <String[]>] [-Search <String>] [-Skip <Int32>] [-All] [-Top <Int32>]
  [-PageSize <Int32>] [-CountVariable <String>] [-CheckpointPath <String>] [-NoPageSize]
  [-ProgressAction <ActionPreference>] [-WhatIf] [-Confirm] [<CommonParameters>]
@@ -25,6 +26,7 @@ Invoke-MgxRequest [-Uri] <String> [-Method <String>] [-Body <Object>] [-Property
 ```
 Invoke-MgxRequest [-Uri] <String> [-Method <String>] [-Body <Object>] [-Property <String[]>]
  [-ExpandProperty <String[]>] [-ConsistencyLevel <String>] [-Headers <Hashtable>] [-ApiVersion <String>] [-Raw]
+ [-Envelope]
  [-Filter <String>] [-Sort <String[]>] [-Search <String>] [-Skip <Int32>] [-All] [-Top <Int32>]
  [-PageSize <Int32>] [-CountVariable <String>] [-CheckpointPath <String>] [-NoPageSize] [-InputObject <Object>]
  [-Concurrency <Int32>] [-SkipNotFound] [-SkipForbidden] [-ProgressAction <ActionPreference>] [-WhatIf]

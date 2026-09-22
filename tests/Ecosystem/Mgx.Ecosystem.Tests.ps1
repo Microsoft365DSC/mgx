@@ -24,7 +24,7 @@ BeforeDiscovery {
 
 BeforeAll {
     $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-    $script:Manifest = Join-Path $repo 'module/mgx.psd1'
+    $script:Manifest = Join-Path $repo 'Modules/M365DSC.mgx/M365DSC.mgx.psd1'
     if (-not (Test-Path $script:Manifest)) { throw "Built module not found at $script:Manifest - run ./build.ps1 first." }
 
     # The battery runs after the permutation's imports. Order inside matters: the side-load
@@ -36,7 +36,7 @@ function Check([string]$name, [scriptblock]$body) {
     try { $results[$name] = @{ ok = [bool](& $body); detail = '' } }
     catch { $results[$name] = @{ ok = $false; detail = $_.Exception.Message } }
 }
-Check 'cmdletsResolve'   { (Get-Command -Module mgx -CommandType Cmdlet).Count -eq 12 }
+Check 'cmdletsResolve'   { (Get-Command -Module M365DSC.mgx -CommandType Cmdlet).Count -eq 12 }
 Check 'noGraphSideLoad'  { @(Get-Module 'Microsoft.Graph*').Count -eq 0 }
 Check 'optionRoundTrip'  { Set-MgxOption -MaxRetryAttempts 4; (Get-MgxOption).MaxRetryAttempts -eq 4 }
 Check 'telemetry'        { $null -ne (Get-MgxTelemetry) }
@@ -49,9 +49,9 @@ Check 'depsResolve'      {
     ($null -ne $polly) -and ($null -ne $rate) -and ($null -ne $stj)
 }
 Check 'removeReimport'   {
-    Remove-Module mgx -Force
+    Remove-Module M365DSC.mgx -Force
     Import-Module '__MANIFEST__' -ErrorAction Stop
-    (Get-Command -Module mgx -CommandType Cmdlet).Count -eq 12 -and $null -ne (Get-MgxOption)
+    (Get-Command -Module M365DSC.mgx -CommandType Cmdlet).Count -eq 12 -and $null -ne (Get-MgxOption)
 }
 Check 'resilienceNamesTheSession' {
     # ThrowTerminatingError is statement-terminating; no -ErrorAction downgrades it,

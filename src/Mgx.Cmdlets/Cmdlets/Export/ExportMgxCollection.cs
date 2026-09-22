@@ -17,7 +17,7 @@ namespace Mgx.Cmdlets.Cmdlets.Export;
 /// to prevent duplicate items on crash resume (H6 dedup fix).
 /// </summary>
 [Cmdlet(VerbsData.Export, "MgxCollection", SupportsShouldProcess = true)]
-[OutputType(typeof(PSObject))]
+[OutputType(typeof(Models.MgxExportResult))]
 public class ExportMgxCollection : MgxCmdletBase
 {
     [Parameter(Mandatory = true, Position = 0)]

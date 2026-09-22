@@ -1,4 +1,4 @@
-#Requires -Modules Pester
+﻿#Requires -Modules Pester
 
 <#
     The behavior of the built module as PowerShell sees it: the cmdlet and parameter contract,
@@ -19,16 +19,16 @@
 #>
 
 BeforeAll {
-    $ModulePath = Join-Path $PSScriptRoot '../../module/mgx.psd1'
+    $ModulePath = Join-Path $PSScriptRoot '../../Modules/M365DSC.mgx/M365DSC.mgx.psd1'
     Import-Module $ModulePath -Force
 }
 
 Describe 'Module Loading' {
     It 'Should import Mgx module' {
-        $module = Get-Module Mgx
+        $module = Get-Module M365DSC.mgx
         $module | Should -Not -BeNullOrEmpty
         # Read expected version from manifest to avoid hardcoded values breaking on version bumps
-        $manifest = Import-PowerShellDataFile (Join-Path $PSScriptRoot '../../module/mgx.psd1')
+        $manifest = Import-PowerShellDataFile (Join-Path $PSScriptRoot '../../Modules/M365DSC.mgx/M365DSC.mgx.psd1')
         $module.Version | Should -Be $manifest.ModuleVersion
     }
 
@@ -36,7 +36,7 @@ Describe 'Module Loading' {
         # Filtered to -CommandType Cmdlet on purpose: Get-Command -Module also counts
         # exported functions, so an unfiltered count would drift for reasons that have
         # nothing to do with the compiled surface.
-        $commands = (Get-Command -Module Mgx -CommandType Cmdlet).Name | Sort-Object
+        $commands = (Get-Command -Module M365DSC.mgx -CommandType Cmdlet).Name | Sort-Object
         $commands | Should -Contain 'Invoke-MgxRequest'
         $commands | Should -Contain 'Invoke-MgxBatchRequest'
         $commands | Should -Contain 'Export-MgxCollection'
@@ -64,12 +64,12 @@ Describe 'Module Loading' {
         #
         # Runs in a child process because the precondition is "Polly.Core has never
         # been loaded", which the parent suite has already violated by this point.
-        $modulePath = Join-Path $PSScriptRoot '../../module/mgx.psd1'
+        $modulePath = Join-Path $PSScriptRoot '../../Modules/M365DSC.mgx/M365DSC.mgx.psd1'
         $probe = @"
 Import-Module '$modulePath' -Force
-try { Remove-Module mgx -ErrorAction Stop }
+try { Remove-Module M365DSC.mgx -ErrorAction Stop }
 catch { Write-Output ('THREW: ' + `$_.Exception.Message.Split([char]10)[0]); exit 1 }
-if (Get-Module mgx) { Write-Output 'STILL LOADED'; exit 1 }
+if (Get-Module M365DSC.mgx) { Write-Output 'STILL LOADED'; exit 1 }
 Write-Output 'OK'
 "@
         # This assertion needs a FRESH session, so it must spawn a child host. Under a
@@ -541,9 +541,9 @@ Describe 'Disable-MgxResilience Parameter Compatibility' {
 }
 
 Describe 'Get-MgxResilience Parameter Compatibility' {
-    It 'Should have OutputType of PSObject' {
+    It 'Should have the OutputType its help documents' {
         $outputType = (Get-Command Get-MgxResilience).OutputType
-        $outputType.Name | Should -Contain 'System.Management.Automation.PSObject'
+        $outputType.Name | Should -Contain 'Mgx.Cmdlets.Models.MgxResilienceOutput'
     }
 
     It 'Should have no mandatory parameters' {
@@ -1096,7 +1096,7 @@ Describe 'Sync-MgxDelta Session Endpoint' {
     # connected session without a tenant, and the child process keeps that connection (and
     # the module's static endpoint state) out of this one.
     BeforeAll {
-        $script:modulePath = Join-Path $PSScriptRoot '../../module/mgx.psd1'
+        $script:modulePath = Join-Path $PSScriptRoot '../../Modules/M365DSC.mgx/M365DSC.mgx.psd1'
         $script:testDir = Join-Path ([System.IO.Path]::GetTempPath()) "mgx-endpoint-tests-$(New-Guid)"
         New-Item -ItemType Directory -Path $script:testDir -Force | Out-Null
 
@@ -1346,7 +1346,7 @@ Describe 'HttpClient Reset Leaves A Held Client Alone' {
 
     BeforeAll {
         # Ensure Mgx.Engine types are loaded (transitive dep of Mgx.Cmdlets)
-        $enginePath = Join-Path $PSScriptRoot '../../module/Mgx.Engine.dll'
+        $enginePath = Join-Path $PSScriptRoot '../../Modules/M365DSC.mgx/Mgx.Engine.dll'
         [System.Reflection.Assembly]::LoadFrom($enginePath) | Out-Null
 
         $script:CmdletBaseType = [Mgx.Cmdlets.Base.MgxCmdletBase]
@@ -1425,7 +1425,7 @@ Describe 'Enable-MgxResilience SDK Client Wrap' {
             return
         }
 
-        $modulePath = Join-Path $PSScriptRoot '../../module/mgx.psd1'
+        $modulePath = Join-Path $PSScriptRoot '../../Modules/M365DSC.mgx/M365DSC.mgx.psd1'
         # Add-MgEnvironment PERSISTS custom environments, so the name is unique per run
         # and removed again in the probe's finally block.
         $envName = 'MgxWrap' + [guid]::NewGuid().ToString('N').Substring(0, 10)

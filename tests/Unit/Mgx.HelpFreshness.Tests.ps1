@@ -457,7 +457,7 @@ Describe 'Compiled help matches its markdown source' {
         # Get-Command reports it among those, while platyPS 0.14.2 does not know it and writes it
         # into the block as an ordinary one: comparing it would say every block is wrong.
         $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-        Import-Module "$repo/module/mgx.psd1" -Force
+        Import-Module "$repo/Modules/M365DSC.mgx/M365DSC.mgx.psd1" -Force
         $common = [System.Management.Automation.PSCmdlet]::CommonParameters
         $mismatches = [System.Collections.Generic.List[string]]::new()
 
@@ -537,7 +537,7 @@ Describe 'Compiled help matches its markdown source' {
         # SwitchParameter, ActionPreference, Hashtable, and an array keeps its brackets, String[].
         # Never the namespace-qualified name.
         $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-        Import-Module "$repo/module/mgx.psd1" -Force
+        Import-Module "$repo/Modules/M365DSC.mgx/M365DSC.mgx.psd1" -Force
         $mismatches = [System.Collections.Generic.List[string]]::new()
 
         foreach ($md in Get-ChildItem $script:HelpDir -Filter '*.md') {

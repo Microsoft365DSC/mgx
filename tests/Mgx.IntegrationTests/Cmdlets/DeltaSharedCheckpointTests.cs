@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Management.Automation;
 using System.Net;
 using System.Text;
@@ -2659,8 +2659,9 @@ public class DeltaSharedCheckpointTests
     /// Two syncs released together on the promotion route. Both completed: whichever lost the
     /// promotion found the temp gone, warned that the changes it counted were not on disk, deleted
     /// the position counting them, re-enumerated over the output the other one was holding, and
-    /// moved the delta token past work that was no longer in any file. One of them ends the run
-    /// instead now, and the token moves once.
+    /// moved the delta token past work that was no longer in any file. A run that loses a file
+    /// ends there instead now - whichever of the files it lost, and whether one of them lost one
+    /// or both did - and the token moves once, or not at all.
     /// </summary>
     [Fact]
     public void Two_syncs_released_together_on_the_promotion_route_advance_the_token_once()
@@ -2708,14 +2709,22 @@ public class DeltaSharedCheckpointTests
                 Assert.True(r.Wait(TimeSpan.FromSeconds(60)), "a sync never came up");
             go.Set();
 
-            // One of them got past the reconcile, so it holds the output and is parked on its
-            // first request. It stays there until the other has finished, which is what the run
-            // that stops does with nothing on the wire at all.
-            Assert.True(gate.Arrived.Wait(TimeSpan.FromSeconds(60)),
-                "neither sync reached the wire");
+            // A run that got past the reconcile holds the output and is parked on its first
+            // request. It stays there until the other has finished, which is what a run that
+            // stops does with nothing on the wire at all - and both of them losing a file is an
+            // outcome of the race too: then no sync has the output and none of them asks for a
+            // page.
             Assert.True(
-                SpinWait.SpinUntil(() => threads.Any(t => !t.IsAlive), TimeSpan.FromSeconds(60)),
-                "both syncs were still running with one of them holding the output");
+                SpinWait.SpinUntil(() => gate.Arrived.IsSet || threads.All(t => !t.IsAlive),
+                    TimeSpan.FromSeconds(60)),
+                "neither sync reached the wire or finished");
+            if (gate.Arrived.IsSet)
+            {
+                Assert.True(
+                    SpinWait.SpinUntil(() => threads.Any(t => !t.IsAlive),
+                        TimeSpan.FromSeconds(60)),
+                    "both syncs were still running with one of them holding the output");
+            }
 
             gate.Released.Set();
             foreach (var t in threads)
@@ -2734,33 +2743,53 @@ public class DeltaSharedCheckpointTests
             // whichever route the run took, and what is asserted of the run itself is the same
             // either way, below: one winner, every change once, and nothing of this one's left
             // on the disk.
-            var stop = Assert.Single(results.SelectMany(r => r.Errors));
-            Assert.StartsWith("Checkpoint", stop.FullyQualifiedErrorId, StringComparison.Ordinal);
-            if (stop.FullyQualifiedErrorId.StartsWith("CheckpointStagingFailed",
-                    StringComparison.Ordinal))
+            var stops = results.SelectMany(r => r.Errors).ToArray();
+            Assert.All(stops, s => Assert.StartsWith("Checkpoint", s.FullyQualifiedErrorId,
+                StringComparison.Ordinal));
+            foreach (var stop in stops)
             {
-                // The promoter's own staged copy, held from the create through the rename. Named
-                // as that and not as an entry nothing could be made of, and the sentence says
-                // the changes are still whole in the temp the checkpoint names.
-                Assert.Contains("another run has the staged copy open", stop.Exception.Message);
-                Assert.Contains("whole, but staging them into", stop.Exception.Message);
-                Assert.Contains("Nothing was changed;", stop.Exception.Message);
-            }
-            else
-            {
-                Assert.Contains("This run stops here; nothing was written.",
-                    stop.Exception.Message);
+                if (stop.FullyQualifiedErrorId.StartsWith("CheckpointStagingFailed",
+                        StringComparison.Ordinal))
+                {
+                    // The promoter's own staged copy, reached between its create and its rename.
+                    // Named as a staging that failed and not as an entry nothing could be made
+                    // of, and the sentence says the changes are still whole in the temp the
+                    // checkpoint names. Which refusal the open came back with is the platform's
+                    // and the moment's, so the reason it quotes is not asserted.
+                    Assert.Contains("whole, but staging them into", stop.Exception.Message);
+                    Assert.Contains("Nothing was changed;", stop.Exception.Message);
+                }
+                else
+                {
+                    Assert.Contains("This run stops here; nothing was written.",
+                        stop.Exception.Message);
+                }
             }
             Assert.DoesNotContain(results.SelectMany(r => r.Warnings),
                 w => w.Contains("missing or incomplete"));
 
-            // One run had the file: every change once, in order, the position spent by the run
-            // that finished, and the token moved exactly once.
-            Assert.Equal(["{\"id\":\"b1\"}", "{\"id\":\"b2\"}", "{\"id\":\"b3\"}"],
-                File.ReadAllLines(output));
-            Assert.False(File.Exists(checkpointPath));
-            Assert.Contains("$deltatoken=D2", DeltaState.Load(deltaPath)!.DeltaLink);
-            Assert.Empty(Directory.GetFiles(dir, "out.jsonl.*.tmp"));
+            if (gate.Arrived.IsSet)
+            {
+                // One run had the file: every change once, in order, the position spent by the
+                // run that finished, and the token moved exactly once.
+                Assert.Single(stops);
+                Assert.Equal(["{\"id\":\"b1\"}", "{\"id\":\"b2\"}", "{\"id\":\"b3\"}"],
+                    File.ReadAllLines(output));
+                Assert.False(File.Exists(checkpointPath));
+                Assert.Contains("$deltatoken=D2", DeltaState.Load(deltaPath)!.DeltaLink);
+                Assert.Empty(Directory.GetFiles(dir, "out.jsonl.*.tmp"));
+            }
+            else
+            {
+                // Neither had it: the files they were released on are the files they leave, and
+                // the token stands where the interrupted run left it.
+                Assert.Equal(2, stops.Length);
+                Assert.False(File.Exists(output));
+                var left = PaginationCheckpoint.Load(checkpointPath);
+                Assert.NotNull(left!.TempFile);
+                Assert.Contains("$deltatoken=D0", DeltaState.Load(deltaPath)!.DeltaLink);
+            }
+
             Assert.Empty(Directory.GetFiles(dir, "*.adopt"));
         }
         finally

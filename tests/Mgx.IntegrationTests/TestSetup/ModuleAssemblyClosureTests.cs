@@ -1,4 +1,4 @@
-using System.Reflection.Metadata;
+﻿using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Xml.Linq;
 
@@ -73,9 +73,10 @@ public class ModuleAssemblyClosureTests
     private static string FindRepositoryPath(string relativePath) =>
         FindRepositoryPath(relativePath, AppContext.BaseDirectory);
 
-    /// <summary>The staged module folder - the directory holding mgx.psd1.</summary>
+    /// <summary>The staged module folder - the directory holding the module manifest.</summary>
     private static string ModuleRoot() =>
-        Path.GetDirectoryName(FindRepositoryPath(Path.Combine("module", "mgx.psd1")))!;
+        Path.GetDirectoryName(FindRepositoryPath(
+            Path.Combine("Modules", "M365DSC.mgx", "M365DSC.mgx.psd1")))!;
 
     /// <summary>
     /// The staged Dependencies folder. Absent means the module has not been built, which is the
