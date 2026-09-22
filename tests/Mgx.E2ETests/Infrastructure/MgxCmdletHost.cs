@@ -1,4 +1,5 @@
-using System.Management.Automation;
+﻿using System.Management.Automation;
+using System.Threading;
 using System.Management.Automation.Runspaces;
 using System.Reflection;
 using Mgx.Cmdlets.Base;
@@ -72,7 +73,9 @@ public sealed class MgxCmdletHost : IDisposable
         GraphBatchClient.ResetPacingState();
         MgxCmdletBase.SetClientOptions(options ?? FastOptions);
         MgxCmdletBase.s_graphEndpoint = graphEndpoint;
-        MgxCmdletBase.s_testTransportFactory = () => transport;
+        MgxCmdletBase.s_testTransportOwned = true;
+        MgxCmdletBase.s_testTransport = transport;
+        Interlocked.Increment(ref MgxCmdletBase.s_testTransportEpoch);
     }
 
     public MgxResult Run(Action<PowerShell> build)
@@ -102,7 +105,9 @@ public sealed class MgxCmdletHost : IDisposable
 
     public void Dispose()
     {
-        MgxCmdletBase.s_testTransportFactory = null;
+        MgxCmdletBase.s_testTransportOwned = false;
+        MgxCmdletBase.s_testTransport = null;
+        Interlocked.Increment(ref MgxCmdletBase.s_testTransportEpoch);
         MgxCmdletBase.s_graphEndpoint = "https://graph.microsoft.com";
         MgxCmdletBase.SetClientOptions(ResilientGraphClientOptions.Default);
         ResiliencePipelineFactory.Reset();

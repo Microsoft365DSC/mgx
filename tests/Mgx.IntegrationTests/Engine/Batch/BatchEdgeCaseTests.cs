@@ -67,7 +67,7 @@ public class BatchEdgeCaseTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
+        var batchClient = new GraphBatchClient(client);
 
         var operations = Enumerable.Range(1, 20)
             .Select(i => new BatchOperation($"/users/user{i}", "GET"))
@@ -103,7 +103,7 @@ public class BatchEdgeCaseTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
+        var batchClient = new GraphBatchClient(client);
 
         var operations = Enumerable.Range(1, 20)
             .Select(i => new BatchOperation($"/users/user{i}", "GET"))
@@ -123,7 +123,63 @@ public class BatchEdgeCaseTests
 
     // ── R2-3: Mismatched response count ───────────────────────────────────────
 
+    [Fact]
+    public async Task Batch_MismatchedResponseCount_IsReportedAsAChunkFailure()
+    {
+        // Send 5 items but server returns only 3 responses
+        var truncatedResponse = """
+        {
+            "responses": [
+                { "id": "1", "status": 200, "body": { "id": "user1" } },
+                { "id": "2", "status": 200, "body": { "id": "user2" } },
+                { "id": "3", "status": 200, "body": { "id": "user3" } }
+            ]
+        }
+        """;
+
+        var handler = new MockHttpHandler();
+        handler.SetDefaultResponse(HttpStatusCode.OK, truncatedResponse);
+
+        using var httpClient = new HttpClient(handler);
+        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+        var batchClient = new GraphBatchClient(client);
+
+        var operations = Enumerable.Range(1, 5)
+            .Select(i => new BatchOperation($"/users/user{i}", "GET"))
+            .ToList();
+
+        var result = await batchClient.ExecuteBatchIndexedAsync(operations);
+
+        var ex = Assert.IsType<InvalidOperationException>(result.ChunkFailure);
+        Assert.Contains("count mismatch", ex.Message);
+        Assert.Contains("sent 5", ex.Message);
+        Assert.Contains("received 3", ex.Message);
+        // The envelope cannot be matched to what was sent, so no item has an answer - but the
+        // requests went out, and every one of them is accounted for by position.
+        Assert.Equal(5, result.Results.Count);
+        Assert.DoesNotContain(result.Results, r => r.Response.Status == GraphBatchClient.NotSentStatus);
+    }
+
     // ── R2-8: 0 items — empty batch ──────────────────────────────────────────
+
+    [Fact]
+    public async Task Batch_ZeroItems_ReturnsEmptyResult_NoHttpCalls()
+    {
+        var handler = new MockHttpHandler();
+        handler.SetDefaultResponse(HttpStatusCode.OK, """{ "responses": [] }""");
+
+        using var httpClient = new HttpClient(handler);
+        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+        var batchClient = new GraphBatchClient(client);
+
+        var operations = new List<BatchOperation>();
+
+        var result = await batchClient.ExecuteBatchIndexedAsync(operations);
+
+        Assert.Empty(result.Results);
+        Assert.Equal(0, handler.RequestCount);
+        Assert.Equal(0, result.Telemetry.TotalRequests);
+    }
 
     // ── R2-8: 1 item — single item batch ─────────────────────────────────────
 
@@ -143,7 +199,7 @@ public class BatchEdgeCaseTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
+        var batchClient = new GraphBatchClient(client);
 
         var operations = new List<BatchOperation> { new("/users/user1", "GET") };
 
@@ -168,7 +224,7 @@ public class BatchEdgeCaseTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
+        var batchClient = new GraphBatchClient(client);
 
         var operations = Enumerable.Range(1, 20)
             .Select(i => new BatchOperation($"/users/user{i}", "GET"))
@@ -198,7 +254,7 @@ public class BatchEdgeCaseTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
-        var batchClient = new GraphBatchClient(client, maxRetryAfterSeconds: 1);
+        var batchClient = new GraphBatchClient(client);
 
         var operations = Enumerable.Range(1, 21)
             .Select(i => new BatchOperation($"/users/user{i}", "GET"))

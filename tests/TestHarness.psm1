@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 
 <#
     .SYNOPSIS
@@ -323,7 +323,18 @@ function Invoke-PesterTest
     $configuration.CodeCoverage.Enabled = $false
 
     Write-Host -Object 'Running all mgx PowerShell Unit Tests'
-    return Invoke-Pester -Configuration $configuration
+    $results = Invoke-Pester -Configuration $configuration
+
+    foreach ($container in $results.Containers | Where-Object { -not $_.Passed })
+    {
+        if ($container.Result -eq 'Failed' -and $container.Tests.Count -eq 0)
+        {
+            $name = if ($container.Item -is [System.IO.FileInfo]) { $container.Item.FullName } else { "$($container.Item)" }
+            Write-Warning -Message "The test file '$name' could not be run at all, so none of its tests were: $($container.ErrorRecord.Exception.Message)"
+        }
+    }
+
+    return $results
 }
 
 <#

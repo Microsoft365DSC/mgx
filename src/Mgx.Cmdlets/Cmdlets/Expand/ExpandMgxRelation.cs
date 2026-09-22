@@ -24,6 +24,10 @@ namespace Mgx.Cmdlets.Cmdlets.Expand;
 [OutputType(typeof(Hashtable))]
 public class ExpandMgxRelation : MgxCmdletBase
 {
+    /// <summary>
+    /// Object to enrich. Accepts a Hashtable (what the Mgx cmdlets emit) or a PSCustomObject;
+    /// the relation is attached in the same shape the object arrived in.
+    /// </summary>
     [Parameter(Mandatory = true, ValueFromPipeline = true)]
     public object InputObject { get; set; } = null!;
 
@@ -76,6 +80,18 @@ public class ExpandMgxRelation : MgxCmdletBase
     {
         base.BeginProcessing();
 
+        // Reject absolute URLs (relative paths only); concatenation onto the versioned
+        // base URL would otherwise silently produce /v1.0/https:/... on the wire.
+        if (Uri.TrimStart().StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            Uri.TrimStart().StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+        {
+            ThrowTerminatingError(new ErrorRecord(
+                new ArgumentException(
+                    $"-Uri must be a relative path (e.g., /groups/{{id}}/members), not an absolute URL. Got: '{Uri}'"),
+                "AbsoluteUriNotAllowed", ErrorCategory.InvalidArgument, null));
+            return;
+        }
+
         if (!Uri.Contains("{id}", StringComparison.OrdinalIgnoreCase))
         {
             ThrowTerminatingError(new ErrorRecord(
@@ -124,6 +140,13 @@ public class ExpandMgxRelation : MgxCmdletBase
         catch (OperationCanceledException) when (CancellationToken.IsCancellationRequested)
         {
             WriteWarning("Expand-MgxRelation cancelled by user.");
+        }
+        catch (Exception)
+        {
+            // Unexpected exception types skip the drains above; the buffered verbose and
+            // warning messages are the context that explains the failure.
+            DrainClientMessages();
+            throw;
         }
 
         base.EndProcessing();
@@ -188,13 +211,17 @@ public class ExpandMgxRelation : MgxCmdletBase
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    var errorBody = await response.Content.ReadAsStringAsync(ct);
+                    var errorBody = await client.ReadBodyAsStringAsync(response, ct);
                     throw new GraphServiceException(response.StatusCode, errorBody);
                 }
 
-                using var stream = await response.Content.ReadAsStreamAsync(ct);
-                var json = await JsonSerializer.DeserializeAsync<JsonElement>(stream, cancellationToken: ct);
-                var root = json.Clone();
+                // The same read the rest of the module does: the declared charset, and the
+                // byte-order mark the byte-level deserialize refuses - which lost every
+                // relation to a per-URL error. A body this cannot use is this URL's failure,
+                // which is what the fan-out reports and where the streams are written from.
+                var bodyBytes = await client.ReadBodyAsBytesAsync(response, ct);
+                var payload = ReadJsonPayloadCore(response.Content.Headers.ContentType, bodyBytes);
+                var root = ReadRelationBody(payload);
 
                 if (root.ValueKind == JsonValueKind.Object
                     && root.TryGetProperty("value", out var valueEl)
@@ -271,6 +298,11 @@ public class ExpandMgxRelation : MgxCmdletBase
 
     }
 
+    /// <summary>
+    /// Output all buffered objects with the relation property attached.
+    /// Objects missing IdProperty or with errored IDs get null for the relation.
+    /// Preserves original pipeline order.
+    /// </summary>
     private void OutputBufferedObjects(Dictionary<string, JsonElement[]> resultsById)
     {
         // Cache converted results per ID to avoid redundant JsonToHashtable calls
@@ -285,8 +317,10 @@ public class ExpandMgxRelation : MgxCmdletBase
 
             if (id != null && resultsById.ContainsKey(id))
             {
-                // Converted per input object rather than once per id, so two inputs sharing an id
-                // get their own hashtables and writing to one relation cannot rewrite the other
+                // Converted per input object rather than once per id. Two inputs carrying the
+                // same id used to receive the SAME hashtables, so writing to one output's
+                // relation silently rewrote the others'. The conversion only repeats when an id
+                // actually appears twice, which is the same case that made the sharing visible.
                 var items = resultsById[id];
                 var converted = items.Select(JsonToHashtable).ToArray();
 
@@ -341,6 +375,42 @@ public class ExpandMgxRelation : MgxCmdletBase
         }
     }
 
+    /// <summary>
+    /// The relation carried by a body, whatever that body declares itself to be. A relation is
+    /// not always an entity: /$count answers text/plain with the number in the body, and this
+    /// cmdlet has no -Raw to fall back on, so the declared type decides how the bytes are
+    /// decoded and not whether they are read. A body that is no JSON value at all carries no
+    /// relation to attach, which is this URL's failure.
+    /// </summary>
+    private static JsonElement ReadRelationBody(JsonPayload payload)
+    {
+        if (payload.Kind == JsonPayloadKind.Parsed)
+            return payload.Json.Clone();
+
+        if (payload.Kind == JsonPayloadKind.NotJson)
+        {
+            try
+            {
+                // Decoded by the declared charset above; the mark GetString leaves behind is
+                // still the serializer's invalid start character.
+                return JsonSerializer.Deserialize<JsonElement>(payload.Text.TrimStart('\uFEFF'));
+            }
+            catch (JsonException) { }
+        }
+
+        throw new InvalidOperationException(DescribeUnusableBody(payload));
+    }
+
+    /// <summary>Why a body carries no relation to attach, for the per-URL error record.</summary>
+    private static string DescribeUnusableBody(JsonPayload payload) => payload.Kind switch
+    {
+        JsonPayloadKind.Empty => "The response has no content, so there is no relation to attach.",
+        JsonPayloadKind.NotJson => $"The response is {payload.MediaType} and does not parse as JSON. "
+             + "Body starts: " + payload.Text[..Math.Min(payload.Text.Length, 200)],
+        _ => "The response declared JSON but does not parse. Body starts: "
+             + payload.Text[..Math.Min(payload.Text.Length, 200)],
+    };
+
     private string BuildUrl(string id)
     {
         var resolved = IdPlaceholder.Replace(Uri, System.Uri.EscapeDataString(id));
@@ -351,25 +421,13 @@ public class ExpandMgxRelation : MgxCmdletBase
         // -Uri: Graph rejects a URL carrying $top twice, which turned -Top into a 400 for
         // every input object.
         // The client-side truncation in the lambda enforces -Top either way.
-        if (Top > 0 && !HasTopQueryOption(url))
+        if (Top > 0 && !ExistingQueryOptions(url).Contains("$top"))
         {
             var separator = url.Contains('?') ? "&" : "?";
             url = $"{url}{separator}$top={Top}";
         }
 
         return url;
-    }
-
-    private static bool HasTopQueryOption(string url)
-    {
-        var q = url.IndexOf('?');
-        if (q < 0) return false;
-        foreach (var part in url[(q + 1)..].Split('&'))
-        {
-            var name = part.Split('=', 2)[0];
-            if (string.Equals(name, "$top", StringComparison.OrdinalIgnoreCase)) return true;
-        }
-        return false;
     }
 
     private void HandleFanOutErrors(
@@ -382,7 +440,7 @@ public class ExpandMgxRelation : MgxCmdletBase
         foreach (var (url, ex) in errors)
         {
             var id = urlToId.GetValueOrDefault(url, url);
-            var statusCode = GetStatusCodeFromException(ex);
+            var statusCode = MgxErrorPresentation.TryGetStatus(ex);
 
             if (SkipNotFound.IsPresent && statusCode == HttpStatusCode.NotFound)
             {
@@ -395,19 +453,9 @@ public class ExpandMgxRelation : MgxCmdletBase
                 continue;
             }
 
-            var (errorId, category) = ex switch
-            {
-                BrokenCircuitException bce => ("CircuitBroken", bce.InnerException is GraphServiceException inner
-                    ? MapStatusToCategory(inner.StatusCode)
-                    : ErrorCategory.ResourceUnavailable),
-                HttpRequestException => ("HttpError", ErrorCategory.ConnectionError),
-                _ => ("ExpandRelationError", statusCode.HasValue
-                    ? MapStatusToCategory(statusCode.Value)
-                    : ErrorCategory.NotSpecified)
-            };
-            Exception reportEx = ex is BrokenCircuitException
-                ? new InvalidOperationException(CircuitBreakerMessage, ex) : ex;
-            WriteError(new ErrorRecord(reportEx, errorId, category, id));
+            var (errorId, category, report) =
+                MgxErrorPresentation.PresentItemFailure(ex, "ExpandRelationError", CircuitBreakerMessage);
+            WriteError(new ErrorRecord(report, errorId, category, id));
         }
 
         int skippedTotal = skipped404 + skipped403;
@@ -420,10 +468,4 @@ public class ExpandMgxRelation : MgxCmdletBase
         }
     }
 
-    private static HttpStatusCode? GetStatusCodeFromException(Exception ex)
-    {
-        if (ex is GraphServiceException gse) return gse.StatusCode;
-        if (ex is HttpRequestException hre && hre.StatusCode.HasValue) return hre.StatusCode.Value;
-        return null;
-    }
 }

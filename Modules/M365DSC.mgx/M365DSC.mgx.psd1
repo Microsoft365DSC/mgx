@@ -1,6 +1,6 @@
-@{
+﻿@{
     RootModule        = 'M365DSC.mgx.psm1'
-    ModuleVersion     = '2.1.1'
+    ModuleVersion     = '2.1.7'
     GUID              = 'f978315f-75c0-48f5-b929-ca7a7757d1d2'
     Author            = 'Thomas Maillo Grome, Fabien Tschanz'
     CompanyName       = 'Mgx'
@@ -49,6 +49,14 @@
             LicenseUri   = 'https://github.com/Microsoft365DSC/mgx/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/Microsoft365DSC/mgx'
             ReleaseNotes = @'
+v2.1.7
+- Added Invoke-MgxRequest -Envelope, emitting the payload as the service sent it, collection envelope and all, so a collection holding one item can be told from a single entity.
+- Fixed the batch retry loop waiting out its exponential fallback without regard for MaxRetryAfterSeconds, which capped only the delays a server asked for.
+
+v2.1.6
+- Merged upstream gromedev/mgx 2.1.2 through 2.1.5.
+- Fixed a Graph error reporting only its top level message: the property that was actually wrong sat in the innerError of the response and was discarded.
+
 v2.1.1
 - Fixed Invoke-MgxRequest failing with a missing System.IO.Pipelines assembly on PowerShell 7.6 hosts that do not ship it.
 

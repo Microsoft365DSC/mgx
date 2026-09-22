@@ -1,3 +1,4 @@
+﻿using Mgx.Engine.Errors;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
@@ -9,7 +10,7 @@ namespace Mgx.Engine.Http;
 /// <summary>
 /// Sends batched requests to Graph /$batch endpoint (up to 20 per call).
 /// Uses a two-layer retry design: Polly (via ResilientGraphClient) handles
-/// transport-level retries on the outer $batch POST. This class handles
+/// transport-level retries on the outer $batch POST; this class handles
 /// per-item retries within the 200-OK batch response body (429, 5xx for
 /// idempotent methods). Graph always returns HTTP 200 for $batch, so Polly
 /// never sees per-item errors.
@@ -51,20 +52,41 @@ public sealed class GraphBatchClient
     /// </summary>
     public Dictionary<string, string>? ItemHeaders { get; set; }
 
+    /// <summary>
+    /// Runs once a parallel run has stopped sending: a chunk's own POST failed, the failure is
+    /// recorded and the stop its siblings read is canceled. Null on every shipping path: the
+    /// suite holds a wire answer here so that what a sibling does next happens on the far side
+    /// of the stop, rather than a moment either way of it. Per client rather than static, so a
+    /// test arms only the run it built.
+    /// </summary>
+    internal Action? SendingStopped { get; set; }
+
+    /// <summary>
+    /// Runs as a chunk enters the wait between two of its own attempts, with the stop already
+    /// linked into that wait. Null on every shipping path: the suite answers a peer chunk here
+    /// so a refusal lands on a backoff that is running, which is the only state the question of
+    /// whether the stop ends it can be asked from. Per client rather than static, so a test arms
+    /// only the run it built.
+    /// </summary>
+    internal Action? RetryWaitStarted { get; set; }
+
     private readonly int _batchChunkConcurrency;
     private readonly int _batchItemsPerSecond;
 
-    // When the last batch completed and how many items it carried, so successive small-batch
-    // calls are paced and not only the chunks inside one call
+    // Cross-call pacing state: tracks when the last batch completed and how many items
+    // it processed so that successive small-batch calls (e.g., 20 items = 1 chunk) still
+    // get paced. Without this, pacing only fires between chunks within a single call.
     private static long s_lastBatchCompletedTicks;
     private static int s_lastBatchItemCount;
 
-    // The adapted rate persists across calls, so a later call starts reduced rather than back
-    // at the configured BatchItemsPerSecond
+    // Cross-call adaptive rate: when 429s trigger rate halving, persist the adapted rate
+    // across Invoke-MgxBatchRequest calls so subsequent calls start at the reduced rate
+    // instead of resetting to the configured BatchItemsPerSecond.
     private static int s_adaptedItemsPerSecond;
 
-    // When the last 429 was seen, so the adapted rate can expire rather than holding every
-    // later batch down for the life of the session
+    // When the last 429 was seen, so the adapted rate can expire. Without an expiry a single
+    // throttling episode kept every later batch in the process at the reduced rate for the
+    // lifetime of the session, with no way to recover short of restarting PowerShell.
     private static long s_lastThrottleTicks;
 
     // Chunk-loop AIMD tuning. The shared math (halve on throttle, additive recovery, expiry
@@ -107,7 +129,7 @@ public sealed class GraphBatchClient
         var operations = urls.Select(u => new BatchOperation(u)).ToList();
         var result = await ExecuteBatchIndexedAsync(operations, cancellationToken);
 
-        // URL-keyed for the legacy overload
+        // Convert to URL-keyed dictionary (backward compatible)
         var results = new Dictionary<string, GraphBatchResponseItem>(result.Results.Count);
         foreach (var (op, response) in result.Results)
             results[op.Url] = response;
@@ -115,15 +137,137 @@ public sealed class GraphBatchClient
     }
 
     /// <summary>
-    /// Execute multiple requests of any HTTP method as batches, chunked to the Graph limit of 20
-    /// and allowing duplicate URLs. Returns per-item results and operational telemetry. Items
-    /// that exhausted per-chunk retries on a retryable status get one follow-up batch.
+    /// Execute multiple requests (any HTTP method) as batches.
+    /// Returns BatchExecutionResult with per-item results and operational telemetry.
+    /// Auto-chunks into 20-request batches per Graph API limit.
+    /// Supports duplicate URLs (e.g., multiple POSTs to /users).
+    /// After all chunks complete, items that exhausted per-chunk retries but have
+    /// retryable status codes are retried once more as a follow-up batch.
     /// </summary>
     /// <summary>
-    /// Status recorded for an operation never sent because an earlier chunk failed. Distinct from
-    /// any HTTP status, so a caller can tell a write that may have landed from one that did not.
+    /// Status recorded for an operation that was never sent, because another chunk failed
+    /// first - not necessarily one before it, since chunks can run in parallel. Distinct from
+    /// any HTTP status so a caller can tell "not attempted" from "attempted and refused" - the
+    /// difference between a write that may have landed and one that certainly did not.
     /// </summary>
     public const int NotSentStatus = 0;
+
+    /// <summary>
+    /// Status recorded for the items of a chunk whose own POST failed without a status of its
+    /// own. Two refusals land on it and it cannot separate them: a POST that went out and whose
+    /// answer never completed - a stalled response body, a transport failure mid-flight - and a
+    /// POST that never left, refused by an open circuit or by a rate limiter with no permit for
+    /// it. It is read as the first, because that is the reading a caller can act on safely: the
+    /// writes may have been applied, so resending them is a decision about duplicates.
+    /// NotSentStatus is kept for the refusals nothing went out for and the code knows it - a
+    /// chunk the run's stop reached before its first attempt, and the chunks never POSTed at
+    /// all - where claiming the opposite would be the more expensive error.
+    /// </summary>
+    private const int RefusedWithoutStatus = 503;
+
+    /// <summary>
+    /// What a chunk spent on its way to whatever happened to it. Held by the caller of the
+    /// attempt loop rather than returned from it, so a chunk that fails still reports what it
+    /// cost - the throttles it met are the reason it failed, not a detail lost with it.
+    /// </summary>
+    private sealed class ChunkAttemptCounts
+    {
+        public int ItemRetries;
+        public int ThrottleEncounters;
+        public long RetryDelayMs;
+    }
+
+    /// <summary>
+    /// A chunk's own $batch call failed. Carries the per-item results the earlier attempts of
+    /// that same chunk already collected - the server answered those items, and after the
+    /// failure they are the only record of what it applied - and what those attempts cost.
+    /// </summary>
+    private sealed class ChunkSendFailedException : Exception
+    {
+        public ChunkSendFailedException(
+            Exception cause,
+            (BatchOperation Operation, GraphBatchResponseItem Response)?[] partial,
+            int refusedStatus,
+            ChunkAttemptCounts counts)
+            : base(cause.Message, cause)
+        {
+            Cause = cause;
+            Partial = partial;
+            Counts = counts;
+            // Below 400 is not a status a refused item may carry: a success is counted in
+            // [200,400) and the dead-letter file keeps nothing under 400, so a 304 from a proxy
+            // or a captive portal reported twenty refused writes as twenty applied ones. Graph
+            // answers $batch with 200 or an error; anything else came from something between.
+            RefusedStatus = refusedStatus >= 400 ? refusedStatus : RefusedWithoutStatus;
+        }
+
+        /// <summary>The failure itself, as the caller is to see it.</summary>
+        public Exception Cause { get; }
+
+        /// <summary>By chunk-relative index; null where no sub-response arrived.</summary>
+        public (BatchOperation Operation, GraphBatchResponseItem Response)?[] Partial { get; }
+
+        /// <summary>Status for the items of this chunk that have no sub-response.</summary>
+        public int RefusedStatus { get; }
+
+        /// <summary>The retries, throttles and delay this chunk had spent when it failed.</summary>
+        public ChunkAttemptCounts Counts { get; }
+    }
+
+    /// <summary>
+    /// Writes a refused chunk's own slots: an item the server answered keeps that answer, the
+    /// rest take the refusal status, covering both a POST that went out unanswered and one an
+    /// open circuit or a rate limiter stopped before it left - read as the first, so none of
+    /// them may be reported as never sent.
+    /// </summary>
+    private static void FillRefusedChunk(
+        (BatchOperation Operation, GraphBatchResponseItem Response)?[] results,
+        BatchOperation[] chunk, int offset, ChunkSendFailedException failure)
+    {
+        for (int i = 0; i < chunk.Length; i++)
+        {
+            var answered = i < failure.Partial.Length ? failure.Partial[i] : null;
+            results[offset + i] = answered ?? (chunk[i], new GraphBatchResponseItem
+            {
+                Id = (offset + i).ToString(),
+                Status = failure.RefusedStatus
+            });
+        }
+    }
+
+    /// <summary>
+    /// Writes back what the batch-level retry pass got answers for before its own POST was
+    /// refused. Every item the pass carries already holds a status the first pass gave it, so
+    /// unlike a refused first-pass chunk there is nothing to fill in for the rest: an item this
+    /// pass got no answer of its own for keeps the one it came in with. Left out, an item the
+    /// pass confirmed is reported with the failure that sent it here - for a write the server
+    /// applied, that is an instruction to apply it a second time.
+    /// </summary>
+    private static void FillAnsweredRetryChunk(
+        (BatchOperation Operation, GraphBatchResponseItem Response)?[] results,
+        IReadOnlyList<(int OriginalIndex, BatchOperation Op)> candidates, int offset,
+        ChunkSendFailedException failure)
+    {
+        for (int i = 0; i < failure.Partial.Length; i++)
+        {
+            var answered = failure.Partial[i];
+            if (answered != null)
+                results[candidates[offset + i].OriginalIndex] = answered;
+        }
+    }
+
+    /// <summary>
+    /// A failed chunk's retries, throttles and delay. They are the run's, not the chunk's: the
+    /// chunk that met the throttles is often the one that then failed, and reading them only
+    /// off the chunks that succeeded reported a batch throttled into refusal as an untroubled
+    /// one that happened to end badly.
+    /// </summary>
+    private static void RecordChunkCosts(BatchTelemetry telemetry, ChunkSendFailedException failure)
+    {
+        telemetry.AddItemRetries(failure.Counts.ItemRetries);
+        telemetry.AddThrottleEncounters(failure.Counts.ThrottleEncounters);
+        telemetry.AddRetryDelayMs(failure.Counts.RetryDelayMs);
+    }
 
     public async Task<BatchExecutionResult> ExecuteBatchIndexedAsync(
         IReadOnlyList<BatchOperation> operations,
@@ -142,9 +286,10 @@ public sealed class GraphBatchClient
         Exception? chunkFailure = null;
         var notSent = new List<BatchOperation>();
 
-        // A recent write batch delays this one to hold target throughput. Writes only, since a
-        // GET batch does not hit the write throttle. Capped to one chunk worth, to smooth the
-        // gap between calls rather than re-pace the whole
+        // Cross-call pacing: if a previous write batch completed recently, delay to maintain
+        // target throughput. Only applies to batches containing writes (POST/PATCH/DELETE) -
+        // GET-only batches don't hit Graph's write throttle. Delay is capped to one chunk's
+        // worth (MaxBatchSize items) to smooth the gap between calls, not re-pace the whole
         // previous batch.
         var hasWrites = HasWriteOperations(operations);
         if (_batchItemsPerSecond > 0 && hasWrites)
@@ -165,17 +310,20 @@ public sealed class GraphBatchClient
             }
         }
 
+        // Process in chunks of MaxBatchSize
         var chunks = operations.Chunk(MaxBatchSize).ToArray();
 
         if (_batchChunkConcurrency <= 1)
         {
-            // Sequential mode applies backpressure between chunks
+            // Sequential mode (default): cross-chunk backpressure delays between chunks
             int globalOffset = 0;
             int crossChunkDelaySeconds = 0;
             long prevChunkElapsedMs = 0;
             int chunkIndex = 0;
-            // Starts at the persisted adapted rate, or the configured one, and halves on each
-            // 429. Persisted so a loop of calls does not reset to full rate and re-throttle
+            // Adaptive pacing: starts at the persisted adapted rate (if any), otherwise
+            // the configured rate. Halves on each 429 encounter. Persisted across calls
+            // so that successive Invoke-MgxBatchRequest invocations in a loop don't reset
+            // to the full rate and immediately get re-throttled.
             var adapted = Volatile.Read(ref s_adaptedItemsPerSecond);
             if (adapted > 0 && AdaptivePacing.AdaptedRateHasExpired(
                     Interlocked.Read(ref s_lastThrottleTicks), Stopwatch.GetTimestamp()))
@@ -205,7 +353,7 @@ public sealed class GraphBatchClient
                 }
                 else if (globalOffset > 0 && effectiveItemsPerSecond > 0 && hasWrites)
                 {
-                    // Smooths write throughput to avoid burst and stall
+                    // Inter-chunk pacing: smooth write throughput to avoid burst-and-stall.
                     var targetMs = (int)(chunk.Length / (double)effectiveItemsPerSecond * 1000);
                     var pacingMs = targetMs - (int)prevChunkElapsedMs;
                     if (pacingMs > 0)
@@ -227,20 +375,23 @@ public sealed class GraphBatchClient
                     (chunkResults, throttleDelay, chunkRetries, chunkThrottles, chunkRetryDelayMs) =
                         await SendBatchWithRetryAsync(chunk, cancellationToken);
                 }
-                // Only an HTTP-level failure of the chunk itself. A malformed envelope is a
-                // protocol violation rather than a chunk that did not land, and still throws
-                catch (GraphServiceException ex)
+                // Any way this chunk's own call can fail, an envelope that answers nothing that
+                // was sent included. Each of them is a failure of this chunk and is reported as
+                // one; none of them is a reason to lose the chunks applied before it.
+                catch (ChunkSendFailedException ex)
                 {
                     // The chunks before this one were applied on the server. Letting this
                     // exception out discards their results, which is the only record of what
                     // landed - and for writes that is the thing the caller most needs. Stop
                     // here, keep them, and hand the failure back alongside.
-                    //
-                    // The unsent slots are filled rather than dropped: callers line results up
-                    // against their own input list by position, so a short list would misattribute
-                    // every error after the gap.
-                    chunkFailure = ex;
-                    for (int i = globalOffset; i < operations.Count; i++)
+                    chunkFailure = ex.Cause;
+                    RecordChunkCosts(telemetry, ex);
+                    FillRefusedChunk(results, chunk, globalOffset, ex);
+
+                    // Only the chunks after this one were never sent. The unsent slots are filled
+                    // rather than dropped: callers line results up against their own input list
+                    // by position, so a short list would misattribute every error after the gap.
+                    for (int i = globalOffset + chunk.Length; i < operations.Count; i++)
                     {
                         notSent.Add(operations[i]);
                         results[i] = (operations[i], new GraphBatchResponseItem
@@ -298,7 +449,7 @@ public sealed class GraphBatchClient
         else
         {
             // Parallel mode: SemaphoreSlim-bounded concurrent chunk execution
-            // No cross-chunk backpressure. Chunks run independently
+            // No cross-chunk backpressure; chunks run independently
             var chunkOffsets = new int[chunks.Length];
             int runningOffset = 0;
             for (int j = 0; j < chunks.Length; j++)
@@ -308,16 +459,30 @@ public sealed class GraphBatchClient
             }
 
             using var semaphore = new SemaphoreSlim(_batchChunkConcurrency);
+            Exception? parallelFailure = null;
+            // Cancelled when a chunk's own POST fails. The chunks still running read it to stop
+            // before their next attempt, and wait on it alongside their backoff - a chunk part
+            // way through a Retry-After has stopped sending, and holding the call open for the
+            // rest of a delay it will not act on serves nobody.
+            using var stopSource = new CancellationTokenSource();
             var tasks = chunks.Select(async (chunk, chunkIndex) =>
             {
                 bool acquired = false;
                 try
                 {
+                    // A chunk has already failed its own POST. The sequential path stops there
+                    // instead of sending the rest, and so does this one: what is in flight
+                    // finishes and is kept, nothing further goes out. Read before queueing as
+                    // well as after acquiring - a chunk that waited out the queue must not send
+                    // on the strength of a check it made before the refusal happened.
+                    if (Volatile.Read(ref parallelFailure) != null) return;
                     await semaphore.WaitAsync(cancellationToken);
                     acquired = true;
+                    if (Volatile.Read(ref parallelFailure) != null) return;
 
                     var (chunkResults, _, chunkRetries, chunkThrottles, chunkRetryDelayMs) =
-                        await SendBatchWithRetryAsync(chunk, cancellationToken);
+                        await SendBatchWithRetryAsync(chunk, cancellationToken,
+                            stopRequested: stopSource.Token);
                     telemetry.AddItemRetries(chunkRetries);
                     telemetry.AddThrottleEncounters(chunkThrottles);
                     telemetry.AddRetryDelayMs(chunkRetryDelayMs);
@@ -326,6 +491,22 @@ public sealed class GraphBatchClient
                     for (int i = 0; i < chunkResults.Count; i++)
                         results[offset + i] = chunkResults[i];
                 }
+                // A failure of the chunk's own call, as in the sequential branch. Task.WhenAll
+                // would rethrow it and take the populated results array with it - the results of
+                // the chunks that DID land, which for writes is the record the caller most needs.
+                catch (ChunkSendFailedException ex)
+                {
+                    // Chunks fail concurrently, and only the first can be the one failure the
+                    // caller is handed. The others are still things that happened to the run,
+                    // and dropping them leaves a chunk whose items all failed with no statement
+                    // anywhere of why.
+                    if (Interlocked.CompareExchange(ref parallelFailure, ex.Cause, null) != null)
+                        _pendingVerbose.Enqueue($"Batch chunk {chunkIndex} also failed: {ex.Cause.Message}");
+                    stopSource.Cancel();
+                    SendingStopped?.Invoke();
+                    RecordChunkCosts(telemetry, ex);
+                    FillRefusedChunk(results, chunk, chunkOffsets[chunkIndex], ex);
+                }
                 finally
                 {
                     if (acquired) semaphore.Release();
@@ -333,25 +514,52 @@ public sealed class GraphBatchClient
             }).ToArray();
 
             await Task.WhenAll(tasks);
+
+            if (parallelFailure != null)
+            {
+                chunkFailure = parallelFailure;
+                // A failed chunk filled its own slots above, so every slot still empty belongs
+                // to a chunk that was never sent. Filled rather than dropped, for the same reason
+                // as above: callers line results up against their own input list by position.
+                for (int i = 0; i < results.Length; i++)
+                {
+                    if (results[i] != null) continue;
+                    notSent.Add(operations[i]);
+                    results[i] = (operations[i], new GraphBatchResponseItem
+                    {
+                        Id = i.ToString(),
+                        Status = NotSentStatus
+                    });
+                }
+            }
         }
 
         // Batch-level retry for items that exhausted per-chunk retries
         // but have retryable status codes. Throttle pressure may have subsided.
+        //
+        // Not after a chunk failure. The run stopped sending and this pass is a send, so it is
+        // skipped for every candidate rather than for the refused chunk's own. For a candidate
+        // a refusal carried, resending is the duplicate write the stop exists to prevent; for
+        // one a chunk that was POSTed and answered in full left failing, it is an extra attempt
+        // the run no longer has. Both are handed back as they stand, for the caller to resubmit
+        // knowing what it is resubmitting.
         var failedRetryable = new List<(int OriginalIndex, BatchOperation Op)>();
-        for (int i = 0; i < results.Length; i++)
+        if (chunkFailure is null)
         {
-            if (results[i] == null) continue;
-            var (op, response) = results[i]!.Value;
-            if (IsRetryable(response.Status, op.Method))
-                failedRetryable.Add((i, op));
+            for (int i = 0; i < results.Length; i++)
+            {
+                if (results[i] == null) continue;
+                var (op, response) = results[i]!.Value;
+                if (IsRetryable(response.Status, op.Method))
+                    failedRetryable.Add((i, op));
+            }
         }
 
         if (failedRetryable.Count > 0)
         {
-            telemetry.BatchLevelRetries = failedRetryable.Count;
-
-            // A pause before the batch-level retry pass lets throttle pressure subside
-            var backpressureDelay = Math.Min(2, _maxRetryAfterSeconds);
+            // Backpressure delay before the batch-level retry pass.
+            // Minimum 2s pause to let throttle pressure subside before retrying failed items.
+            var backpressureDelay = 2;
             var backpressureJitter = backpressureDelay * Random.Shared.NextDouble() * 0.5;
             _pendingVerbose.Enqueue(
                 $"Batch-level retry: {failedRetryable.Count} items exhausted per-chunk retries. "
@@ -387,8 +595,35 @@ public sealed class GraphBatchClient
                 }
 
                 var p2ChunkSw = Stopwatch.StartNew();
-                var (chunkResults, chunkThrottleDelay, chunkRetries, chunkThrottles, chunkRetryDelayMs) =
-                    await SendBatchWithRetryAsync(chunk, cancellationToken);
+                IReadOnlyList<(BatchOperation Operation, GraphBatchResponseItem Response)> chunkResults;
+                int chunkThrottleDelay, chunkRetries, chunkThrottles;
+                long chunkRetryDelayMs;
+                // Counted as each chunk goes out, for the same reason item retries are: the
+                // pass can be refused on its first chunk, and the candidates queued behind that
+                // chunk are then never POSTed. Read off the candidate list before the pass ran,
+                // the count reported forty batch-level retries over a wire that carried twenty.
+                // Here rather than after the call, so a chunk the server refused still counts -
+                // its POST went out, and what it carried may have been applied.
+                telemetry.BatchLevelRetries += chunk.Length;
+                try
+                {
+                    (chunkResults, chunkThrottleDelay, chunkRetries, chunkThrottles, chunkRetryDelayMs) =
+                        await SendBatchWithRetryAsync(chunk, cancellationToken);
+                }
+                // This pass exists to improve results that are already in hand. Its own POST
+                // failing does not unmake them: the items it carried keep the statuses the
+                // server gave them, which is what the caller has to act on. Thrown, it takes
+                // the whole array with it - every chunk that landed included - and the run ends
+                // with nothing said about writes the server applied. What its earlier attempts
+                // did get answers for is written back before it stops: those items were answered
+                // in this pass, and a later attempt of it being refused does not unmake that.
+                catch (ChunkSendFailedException ex)
+                {
+                    chunkFailure = ex.Cause;
+                    RecordChunkCosts(telemetry, ex);
+                    FillAnsweredRetryChunk(results, failedRetryable, retryOffset, ex);
+                    break;
+                }
                 phase2PrevChunkMs = p2ChunkSw.ElapsedMilliseconds;
                 phase2ThrottleDelay = chunkThrottleDelay;
                 telemetry.AddItemRetries(chunkRetries);
@@ -415,8 +650,10 @@ public sealed class GraphBatchClient
 
         var finalResults = results.Select(r => r!.Value).ToList();
 
-        // Compute success/failure counts and total elapsed
-        telemetry.Succeeded = finalResults.Count(r => r.Response.Status < 400);
+        // Compute success/failure counts and total elapsed. An operation that was never sent has
+        // no status and is neither: counting it as a success reported a run that stopped after
+        // one chunk as one in which everything worked.
+        telemetry.Succeeded = finalResults.Count(r => r.Response.Status is >= 200 and < 400);
         telemetry.Failed = finalResults.Count(r => r.Response.Status >= 400);
         telemetry.TotalElapsedMs = batchSw.ElapsedMilliseconds;
 
@@ -436,26 +673,94 @@ public sealed class GraphBatchClient
         };
     }
 
+    /// <summary>
+    /// Returns (Results, ThrottleDelaySeconds, ItemRetries, ThrottleEncounters, RetryDelayMs).
+    /// ThrottleDelaySeconds: highest Retry-After seen, for cross-chunk backpressure.
+    /// ItemRetries: total individual item retries in this chunk.
+    /// ThrottleEncounters: number of 429 responses seen across all attempts.
+    /// RetryDelayMs: total milliseconds spent in retry delays within this chunk.
+    /// <paramref name="stopRequested"/>, once cancelled, ends the chunk before its next attempt
+    /// goes out and ends any backoff it is already waiting out. The items still pending keep
+    /// the last status the server gave them.
+    /// </summary>
     private async Task<(IReadOnlyList<(BatchOperation Operation, GraphBatchResponseItem Response)> Results, int ThrottleDelaySeconds, int ItemRetries, int ThrottleEncounters, long RetryDelayMs)> SendBatchWithRetryAsync(
         BatchOperation[] operations,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CancellationToken stopRequested = default)
     {
-        // Track results by original index position
+        // Results by original index position, held out here so that however the send fails it
+        // fails with them: they are the record of what the server applied, and no shape of
+        // failure is a reason to discard it.
         var results = new (BatchOperation Operation, GraphBatchResponseItem Response)?[operations.Length];
+        // Held out here for the same reason as the results: a chunk that fails has still spent
+        // its retries and met its throttles, and the run's telemetry is where that is reported.
+        var counts = new ChunkAttemptCounts();
+        try
+        {
+            return await SendChunkAttemptsAsync(operations, results, counts, cancellationToken, stopRequested);
+        }
+        // The caller cancelled. Not a chunk failure, and reporting it as one would bury it.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (ChunkSendFailedException)
+        {
+            throw;
+        }
+        // Every other shape - a stalled response body, an open circuit, an envelope that does
+        // not answer what was sent - is this chunk's failure and not the whole run's. Letting
+        // it out would take the results array with it, and every other chunk's outcome in it.
+        catch (Exception ex)
+        {
+            throw new ChunkSendFailedException(ex, results, RefusalStatus(ex), counts);
+        }
+    }
+
+    /// <summary>
+    /// The status the items of a failed chunk take when the failure carries none of its own.
+    /// </summary>
+    private static int RefusalStatus(Exception ex) => ex switch
+    {
+        GraphServiceException graph => (int)graph.StatusCode,
+        HttpRequestException { StatusCode: { } status } => (int)status,
+        _ => RefusedWithoutStatus,
+    };
+
+    private async Task<(IReadOnlyList<(BatchOperation Operation, GraphBatchResponseItem Response)> Results, int ThrottleDelaySeconds, int ItemRetries, int ThrottleEncounters, long RetryDelayMs)> SendChunkAttemptsAsync(
+        BatchOperation[] operations,
+        (BatchOperation Operation, GraphBatchResponseItem Response)?[] results,
+        ChunkAttemptCounts counts,
+        CancellationToken cancellationToken,
+        CancellationToken stopRequested)
+    {
         // Track which indices are still pending
         var pendingIndices = Enumerable.Range(0, operations.Length).ToList();
         // Track last-seen throttle delay for cross-chunk backpressure
         int lastThrottleDelaySeconds = 0;
-        int totalItemRetries = 0;
-        int totalThrottleEncounters = 0;
-        long totalRetryDelayMs = 0;
 
         for (int attempt = 0; attempt <= MaxPerRequestRetries; attempt++)
         {
             if (pendingIndices.Count == 0) break;
+            // A chunk that was already sending when another chunk was refused must not send
+            // again: after the refusal the run is stopping, and a POST into it is a write
+            // nothing will report on. Read at the first attempt as well as the later ones -
+            // the refusal can land in the window between the permit and the first POST.
+            if (stopRequested.IsCancellationRequested)
+            {
+                // At the first attempt nothing has gone out at all. Returning no results leaves
+                // the chunk's slots to the run's never-sent handling, which is what happened to
+                // it; a status here would claim its writes were attempted.
+                if (attempt == 0) return ([], 0, 0, 0, 0);
+                break;
+            }
 
             var batchRequest = new GraphBatchRequest();
             var idToIndex = new Dictionary<string, int>();
+            // What the previous attempt got for the items this one is about to re-send. Put back
+            // if this attempt is stopped before it reaches the wire: an attempt that never went
+            // out does not unmake the answer before it.
+            var withheld = new (BatchOperation Operation, GraphBatchResponseItem Response)?[pendingIndices.Count];
 
             for (int i = 0; i < pendingIndices.Count; i++)
             {
@@ -463,6 +768,12 @@ public sealed class GraphBatchClient
                 var op = operations[originalIndex];
                 var id = (i + 1).ToString();
                 idToIndex[id] = originalIndex;
+
+                // In flight again, so an earlier attempt's answer is no longer the last thing
+                // that happened to it. If this attempt fails the item is attempted-unknown,
+                // not whatever it was before.
+                withheld[i] = results[originalIndex];
+                results[originalIndex] = null;
 
                 var item = new GraphBatchRequestItem
                 {
@@ -484,13 +795,46 @@ public sealed class GraphBatchClient
                 batchRequest.Requests.Add(item);
             }
 
+            // Counted here rather than when the retry was decided on: between the two the run
+            // can stop, and a retry counted in front of a backoff that the stop then ends is a
+            // request the summary claims went out over one that never did.
+            if (attempt > 0) counts.ItemRetries += pendingIndices.Count;
+
             var json = JsonSerializer.Serialize(batchRequest, JsonOptions);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
             var httpSw = Stopwatch.StartNew();
             // paceGate: false - this class owns batch throughput (cross-call pacing, item-level
             // AIMD). Running the request pacer's gate on top would stack two independent AIMD
             // controllers on one workload. Outer responses still feed pacer signal state.
-            using var response = await _client.PostAsync(_batchUrl, content, cancellationToken, paceGate: false);
+            //
+            // stopRetries carries the same stop the loop above reads. The transport retries this
+            // POST on its own for a throttled envelope, and it did so after the run had stopped
+            // sending: the chunk waited out the Retry-After the server asked for and then put
+            // its writes back on the wire. It reaches only the decision to send again, never the
+            // attempt in flight - that one finishes and keeps its answer.
+            HttpResponseMessage response;
+            try
+            {
+                response = await _client.PostAsync(_batchUrl, content, cancellationToken,
+                    paceGate: false, stopRetries: stopRequested);
+            }
+            // The stop reached this attempt while it was still waiting for its turn to send - a
+            // permit from the token bucket - so nothing of it went out. The same situation as
+            // the check at the top of the loop, a moment later, and answered the same way.
+            catch (RequestNotSentException)
+            {
+                // At the first attempt nothing of the chunk has gone out at all, so its slots
+                // belong to the run's never-sent handling rather than to a status here.
+                if (attempt == 0) return ([], 0, 0, 0, 0);
+
+                // A later attempt was counted above in front of a POST that then never left. The
+                // run reports the requests that went out, not the ones it had ready.
+                counts.ItemRetries -= pendingIndices.Count;
+                for (int i = 0; i < pendingIndices.Count; i++)
+                    results[pendingIndices[i]] = withheld[i];
+                break;
+            }
+            using var responseScope = response;
             var httpMs = httpSw.ElapsedMilliseconds;
             if (httpMs > 5000)
                 _pendingVerbose.Enqueue($"Batch HTTP slow: {httpMs}ms for {pendingIndices.Count} items (attempt {attempt + 1})");
@@ -498,15 +842,20 @@ public sealed class GraphBatchClient
             if (!response.IsSuccessStatusCode)
             {
                 using var errCts = _client.CreateBodyReadCts(cancellationToken);
+                Exception refusal;
                 try
                 {
                     var errorBody = await response.Content.ReadAsStringAsync(errCts.Token);
-                    throw new GraphServiceException(response.StatusCode, errorBody);
+                    refusal = new GraphServiceException(response.StatusCode, errorBody);
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
-                    throw new HttpRequestException($"Response body read timed out for error response (HTTP {(int)response.StatusCode}).");
+                    refusal = new HttpRequestException(ResilientGraphClient.BodyReadTimedOutMessage);
                 }
+                // A refusal on a later attempt does not unmake the sub-responses the earlier
+                // attempts got: those items were answered, and for a write that answer is the
+                // record of what the server did. They travel with the failure.
+                throw new ChunkSendFailedException(refusal, results, (int)response.StatusCode, counts);
             }
 
             GraphBatchResponse? batchResponse;
@@ -519,7 +868,7 @@ public sealed class GraphBatchClient
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 // Body read timed out but user didn't cancel - treat as transient network error
-                throw new HttpRequestException("Response body read timed out. The server sent headers but the body stream stalled.");
+                throw new HttpRequestException(ResilientGraphClient.BodyReadTimedOutMessage);
             }
 
             // RD-H3: Validate batch response is not null/empty
@@ -542,16 +891,31 @@ public sealed class GraphBatchClient
 
             var retryIndices = new List<int>();
             int maxRetryAfterSeconds = 0;
+            // Sub-responses the envelope gave no status of its own. Collected rather than
+            // recorded, and answered for below.
+            List<string>? statusless = null;
 
             foreach (var item in batchResponse.Responses)
             {
                 if (!idToIndex.TryGetValue(item.Id, out var originalIndex)) continue;
                 var op = operations[originalIndex];
 
+                // The deserializer cannot tell a "status" member the envelope left out from one
+                // set to 0, and neither of those is a status a server answers with - while 0 is
+                // exactly NotSentStatus. A sub-response exists only for a request that went out,
+                // so recording it would hand back an answered write as one that certainly never
+                // reached the server, with a dead-letter line inviting the caller to send it
+                // again. Left out of the results, for the refusal below to fill.
+                if (item.Status <= 0)
+                {
+                    (statusless ??= []).Add(item.Id);
+                    continue;
+                }
+
                 // Count all 429s regardless of retry budget
                 if (item.Status == 429)
                 {
-                    totalThrottleEncounters++;
+                    counts.ThrottleEncounters++;
 
                     // Parse Retry-After for delay calculation. Handles both formats:
                     // - delta-seconds: "120" (integer seconds)
@@ -561,15 +925,10 @@ public sealed class GraphBatchClient
                         var retryAfterValue = item.Headers
                             .FirstOrDefault(h => string.Equals(h.Key, "Retry-After", StringComparison.OrdinalIgnoreCase))
                             .Value;
-                        if (retryAfterValue != null &&
-                            System.Net.Http.Headers.RetryConditionHeaderValue.TryParse(retryAfterValue, out var ra))
                         {
-                            var delay = ra.Delta
-                                ?? (ra.Date.HasValue ? ra.Date.Value - DateTimeOffset.UtcNow : (TimeSpan?)null);
-                            if (delay.HasValue)
+                            if (RetryAfterPolicy.TryResolveSeconds(retryAfterValue, _maxRetryAfterSeconds,
+                                    out var seconds, out var clamped))
                             {
-                                var seconds = (int)Math.Ceiling(delay.Value.TotalSeconds);
-                                var clamped = Math.Min(Math.Max(seconds, 0), _maxRetryAfterSeconds);
                                 if (clamped < seconds && attempt < MaxPerRequestRetries)
                                 {
                                     _pendingVerbose.Enqueue(
@@ -581,31 +940,65 @@ public sealed class GraphBatchClient
                     }
                 }
 
+                // Recorded even when it is about to be retried: the next attempt overwrites it,
+                // and if there is no next attempt this is what the server last said about the
+                // item - which is not the same thing as never having sent it.
+                results[originalIndex] = (op, item);
                 if (IsRetryable(item.Status, op.Method) && attempt < MaxPerRequestRetries)
-                {
                     retryIndices.Add(originalIndex);
-                }
-                else
-                {
-                    results[originalIndex] = (op, item);
-                }
+            }
+
+            // An envelope that answers a request without saying what happened to it has not
+            // answered it, and is reported the way the count and id checks above report an
+            // envelope that answers the wrong requests: as this chunk's failure. The items it
+            // did answer keep those answers, and the rest take the refusal status - which says
+            // the write may have landed, not that it certainly did not.
+            if (statusless != null)
+            {
+                throw new InvalidOperationException(
+                    $"Graph $batch answered {statusless.Count} of {batchResponse.Responses.Count} requests "
+                    + $"without a status (id {string.Join(", ", statusless)}) "
+                    + $"(attempt {attempt + 1}/{MaxPerRequestRetries + 1}). "
+                    + "The response may have been truncated or rewritten in transit.");
             }
 
             pendingIndices = retryIndices;
-            totalItemRetries += retryIndices.Count;
 
             lastThrottleDelaySeconds = Math.Max(lastThrottleDelaySeconds, maxRetryAfterSeconds);
 
             if (retryIndices.Count > 0 && attempt < MaxPerRequestRetries)
             {
-                var baseDelaySeconds = Math.Min(
-                    maxRetryAfterSeconds > 0 ? maxRetryAfterSeconds : (int)Math.Pow(2, attempt),
-                    _maxRetryAfterSeconds);
-                // 0-50% jitter prevents a thundering herd on batch retries
+                // Waiting out a backoff for an attempt that will not be sent holds the whole
+                // batch open for a Retry-After the run has already stopped honoring.
+                if (stopRequested.IsCancellationRequested) break;
+
+                // The exponential fallback answers to the same ceiling as a server-sent
+                // Retry-After: a cap on how long one attempt may hold the batch open is not
+                // a cap on only the delays the server asked for.
+                var baseDelaySeconds = maxRetryAfterSeconds > 0
+                    ? maxRetryAfterSeconds
+                    : Math.Min((int)Math.Pow(2, attempt), _maxRetryAfterSeconds);
+                // C4: Add 0-50% jitter to prevent thundering herd on batch retries
                 var jitter = baseDelaySeconds * Random.Shared.NextDouble() * 0.5;
                 var retrySw = Stopwatch.StartNew();
-                await Task.Delay(TimeSpan.FromSeconds(baseDelaySeconds + jitter), cancellationToken);
-                totalRetryDelayMs += retrySw.ElapsedMilliseconds;
+                // A refusal that lands mid-wait ends the wait. Checked only before it started,
+                // a chunk that stopped sending 300ms into a peer's Retry-After still held the
+                // call open for the rest of it - a minute, and up to the cap plus jitter.
+                using (var delayCts = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken, stopRequested))
+                {
+                    try
+                    {
+                        RetryWaitStarted?.Invoke();
+                        await Task.Delay(TimeSpan.FromSeconds(baseDelaySeconds + jitter), delayCts.Token);
+                    }
+                    // The stop, not the caller's cancellation. The loop continues to the checks
+                    // at the top of the next attempt, which end the chunk where it stands.
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    {
+                    }
+                }
+                counts.RetryDelayMs += retrySw.ElapsedMilliseconds;
             }
         }
 
@@ -619,7 +1012,8 @@ public sealed class GraphBatchClient
                 $"Batch response missing result for request at index {nullIndex} (URL: {missingOp.Url}). "
                 + "Graph returned the expected number of responses but with non-matching IDs.");
         }
-        return (results.Select(r => r!.Value).ToList(), lastThrottleDelaySeconds, totalItemRetries, totalThrottleEncounters, totalRetryDelayMs);
+        return (results.Select(r => r!.Value).ToList(), lastThrottleDelaySeconds,
+            counts.ItemRetries, counts.ThrottleEncounters, counts.RetryDelayMs);
     }
 
     /// <summary>
@@ -638,10 +1032,13 @@ public sealed class GraphBatchClient
             VerboseWriter(msg);
     }
 
+    /// <summary>
+    /// Whether a batch response item should be retried: the same classifier and policy the
+    /// request pipeline uses, so the two cannot drift apart again. Batch items carry a
+    /// status and inline headers, never an exception - that is the whole difference.
+    /// </summary>
     private static bool IsRetryable(int statusCode, string method)
-    {
-        if (statusCode == 429) return true;
-        if (string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase)) return false;
-        return statusCode is 408 or 500 or 502 or 503 or 504;
-    }
+        => MgxErrorPolicy.ShouldRetry(
+            MgxErrorClassifier.Classify(statusCode).Class,
+            isIdempotent: !string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase));
 }

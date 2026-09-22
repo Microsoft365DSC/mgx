@@ -1,3 +1,4 @@
+using Mgx.Engine.Errors;
 using System.Diagnostics;
 using System.Globalization;
 
@@ -328,12 +329,9 @@ internal static class AdaptiveRequestPacer
             Volatile.Write(ref s_lastPercentageTicks[b], Stopwatch.GetTimestamp());
         }
 
-        if ((int)response.StatusCode == 429)
-        {
-            TimeSpan? retryAfter = response.Headers.RetryAfter?.Delta
-                ?? (response.Headers.RetryAfter?.Date is { } d ? d - DateTimeOffset.UtcNow : null);
-            RecordThrottle(bucket, retryAfter);
-        }
+        var info = MgxErrorClassifier.Classify(response);
+        if (info.Class == MgxErrorClass.Throttle)
+            RecordThrottle(bucket, info.ServerRetryAfter);
     }
 
     /// <summary>
@@ -404,7 +402,9 @@ internal static class AdaptiveRequestPacer
                 if (s_latencyBaselineMs[i] > 0)
                 {
                     var ratio = (double)s_lastLatencyMs[i] / s_latencyBaselineMs[i];
-                    (facts ??= []).Add($"latency {s_lastLatencyMs[i]}ms ({ratio:0.0}x of {s_latencyBaselineMs[i]}ms baseline)");
+                    // Parsed by the benchmark harness, so the separator must not follow the ambient culture.
+                    var ratioText = ratio.ToString("0.0", CultureInfo.InvariantCulture);
+                    (facts ??= []).Add($"latency {s_lastLatencyMs[i]}ms ({ratioText}x of {s_latencyBaselineMs[i]}ms baseline)");
                 }
             }
             if (facts != null)

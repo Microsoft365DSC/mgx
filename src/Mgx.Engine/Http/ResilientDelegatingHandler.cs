@@ -85,6 +85,29 @@ public sealed class ResilientDelegatingHandler : DelegatingHandler
         // Buffer content upfront so retries can reconstruct a fresh request body.
         // Also snapshot all content headers (not just ContentType) to preserve
         // Content-Encoding, Content-Disposition, etc. on retry.
+        // What the pipeline cannot replay, it does not manage. A body whose declared
+        // length exceeds the replay-buffer cap (a drive-content upload runs to 250MB)
+        // passes to the SDK chain untouched: no clone, no retry-option stamp, no
+        // per-attempt timeout, no circuit counting - exactly what the SDK does without
+        // the wrap, which is the only promise the wrap can keep for a stream it cannot
+        // rewind. A body with no declared length is buffered whatever its size - the
+        // read is unavoidable to know, and once buffered it replays like any other.
+        if (request.Content?.Headers.ContentLength > ResilientGraphClient.MaxRequestBodyBytes)
+        {
+            var passSw = System.Diagnostics.Stopwatch.StartNew();
+            var passSucceeded = false;
+            try
+            {
+                var passthrough = await base.SendAsync(request, cancellationToken);
+                passSucceeded = passthrough.IsSuccessStatusCode;
+                return passthrough;
+            }
+            finally
+            {
+                MgxTelemetryCollector.Current.RecordRequest(passSucceeded, passSw.ElapsedMilliseconds);
+            }
+        }
+
         byte[]? contentBytes = null;
         List<KeyValuePair<string, IEnumerable<string>>>? contentHeaders = null;
         if (request.Content != null)
@@ -92,6 +115,7 @@ public sealed class ResilientDelegatingHandler : DelegatingHandler
             contentBytes = await request.Content.ReadAsByteArrayAsync(cancellationToken);
             contentHeaders = request.Content.Headers.ToList();
         }
+        var clientRequestId = Guid.NewGuid().ToString();
 
         RateLimitLease? lease = null;
         var context = ResilienceContextPool.Shared.Get(cancellationToken);
@@ -143,6 +167,10 @@ public sealed class ResilientDelegatingHandler : DelegatingHandler
                     foreach (var header in request.Headers)
                         clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
                     clone.Headers.TryAddWithoutValidation("SdkVersion", MgxSdkVersion.Value);
+                    // Parity with the owned client: one correlation id per logical request,
+                    // shared across attempts - unless the SDK already stamped its own.
+                    if (!clone.Headers.Contains("client-request-id"))
+                        clone.Headers.TryAddWithoutValidation("client-request-id", clientRequestId);
 
                     // Copy request options (used by SDK handlers for per-request metadata)
 #pragma warning disable CS8714 // nullability mismatch in IDictionary generic

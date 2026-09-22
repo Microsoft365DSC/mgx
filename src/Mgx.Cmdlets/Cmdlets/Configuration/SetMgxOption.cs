@@ -6,7 +6,7 @@ namespace Mgx.Cmdlets.Cmdlets.Configuration;
 
 /// <summary>
 /// Set-MgxOption: Configure resilience options for all Mgx cmdlets.
-/// Only parameters explicitly passed are updated. Unspecified values retain their current settings.
+/// Only parameters explicitly passed are updated; unspecified values retain their current settings.
 /// Options take effect on the next cmdlet invocation.
 /// Use -Reset to restore all options to their defaults.
 /// </summary>
@@ -56,7 +56,7 @@ public class SetMgxOption : PSCmdlet
     public double CircuitBreakerFailureRatio { get; set; }
 
     [Parameter]
-    [ValidateRange(1, 1000)]
+    [ValidateRange(2, 1000)]
     public int CircuitBreakerMinThroughput { get; set; }
 
     [Parameter]
@@ -74,6 +74,10 @@ public class SetMgxOption : PSCmdlet
     [Parameter]
     public SwitchParameter Reset { get; set; }
 
+    /// <summary>
+    /// Parameters PowerShell adds to every cmdlet. Present in BoundParameters, but none of them
+    /// is a change to an option.
+    /// </summary>
     private static readonly HashSet<string> CommonParameterNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "Verbose", "Debug", "ErrorAction", "WarningAction", "InformationAction", "ProgressAction",
@@ -85,12 +89,51 @@ public class SetMgxOption : PSCmdlet
     {
         var bound = MyInvocation.BoundParameters;
 
+        // What the target names is what this run would set, which is not everything bound to it:
+        // PowerShell binds the common parameters too, so `-Verbose -WhatIf` previewed a change to
+        // "MgxOptions (Verbose, WhatIf)" - two names that set no option - for a run the guard
+        // below then reports as unchanged. Filtered through the set that guard counts with, in
+        // the order they were bound, dropped entirely when it leaves nothing to name, and never
+        // includes -Reset itself: what it names beside a reset is what the reset ignores, not the
+        // switch that caused it.
+        var optionNames = bound.Keys.Cast<string>()
+            .Where(k => !CommonParameterNames.Contains(k) && k != nameof(Reset))
+            .ToArray();
+
+        // No -Reset and no option: nothing to do (avoids unnecessary pipeline rebuild, which
+        // would destroy circuit breaker failure history). Ahead of ShouldProcess on purpose - the
+        // guard used to sit after the gate, so a bare `Set-MgxOption` previewed "Set" on
+        // "MgxOptions" and prompted for it under -Confirm before landing here and reporting the
+        // run it had just asked about as unchanged.
+        //
+        // Counted without the common parameters, which BoundParameters includes: -Verbose alone
+        // made this look like a real change, so `Set-MgxOption -Verbose` rebuilt the pipeline and
+        // discarded exactly the history this guard was written to keep. The same list the target
+        // below names, so what a preview says and what a run does cannot come apart.
+        if (!Reset.IsPresent && optionNames.Length == 0)
+        {
+            WriteVerbose("No parameters specified. Options unchanged.");
+            return;
+        }
+
+        // -Reset restores every default; an option bound beside it does not survive that. Silently
+        // dropping it would read as the option having taken effect over the defaults it did not
+        // survive, so the run says what it is ignoring before it asks whether to proceed.
+        if (Reset.IsPresent && optionNames.Length > 0)
+        {
+            WriteWarning("-Reset resets every option; "
+                + $"{string.Join(", ", optionNames.Select(n => $"-{n}"))} given beside it are ignored.");
+        }
+
         var target = Reset.IsPresent
-            ? "MgxOptions (reset to defaults)"
-            : $"MgxOptions ({string.Join(", ", bound.Keys)})";
+            ? optionNames.Length == 0
+                ? "MgxOptions (reset to defaults)"
+                : $"MgxOptions (reset to defaults; ignoring {string.Join(", ", optionNames)})"
+            : $"MgxOptions ({string.Join(", ", optionNames)})";
         if (!ShouldProcess(target, "Set"))
             return;
 
+        // -Reset: restore all defaults and return
         if (Reset.IsPresent)
         {
             MgxCmdletBase.SetClientOptions(ResilientGraphClientOptions.Default);
@@ -99,18 +142,7 @@ public class SetMgxOption : PSCmdlet
             return;
         }
 
-        // No parameters passed: nothing to do (avoids unnecessary pipeline rebuild
-        // which would destroy circuit breaker failure history).
-        //
-        // Counted without the common parameters, which BoundParameters includes: -Verbose alone
-        // made this look like a real change, so `Set-MgxOption -Verbose` rebuilt the pipeline and
-        // discarded exactly the history this guard was written to keep.
-        if (!bound.Keys.Cast<string>().Any(k => !CommonParameterNames.Contains(k)))
-        {
-            WriteVerbose("No parameters specified. Options unchanged.");
-            return;
-        }
-
+        // Start from current options, only override values the user actually passed
         var current = MgxCmdletBase.s_clientOptions;
 
         // If user explicitly set rate params but NOT NoRateLimit,
