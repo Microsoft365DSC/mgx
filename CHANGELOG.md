@@ -1,5 +1,11 @@
 ﻿# Changelog
 
+## 2.1.8
+
+### Fixed
+
+- Fixed an issue where paging would stop after three consecutive empty pages. The limit is now 1000, meaning up to 1000 consecutive empty pages are followed, and results after empty pages with a nextLink (Intune `$filter`) are returned. An empty page repeating a nextLink ends paging with a warning. Applies to `-All` and fan-out.
+
 ## 2.1.7
 
 ### Added

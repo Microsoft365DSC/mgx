@@ -77,6 +77,7 @@ public sealed class ConcurrentFanOut
                 var allItems = new List<JsonElement>();
                 string? nextLink = url;
                 int consecutiveEmptyPages = 0;
+                var seenNextLinks = new HashSet<string>(StringComparer.Ordinal) { url };
 
                 // Extract expected host for nextLink validation (SSRF prevention)
                 Uri? expectedHost = Uri.TryCreate(url, UriKind.Absolute, out var parsed) ? parsed : null;
@@ -89,7 +90,7 @@ public sealed class ConcurrentFanOut
                     if (page.Value.Length == 0)
                     {
                         consecutiveEmptyPages++;
-                        if (consecutiveEmptyPages >= 3)
+                        if (consecutiveEmptyPages >= PageIterator.MaxConsecutiveEmptyPages)
                             break;
                     }
                     else
@@ -108,6 +109,12 @@ public sealed class ConcurrentFanOut
                     // Validate nextLink host matches initial URL (prevents SSRF via
                     // crafted Graph responses redirecting authenticated requests)
                     nextLink = NextLinkValidator.ValidateOrThrow(page.NextLink, expectedHost);
+                    if (nextLink != null && !seenNextLinks.Add(nextLink) && page.Value.Length == 0)
+                    {
+                        _client.EnqueueWarning(
+                            "Paging stopped: an empty page repeated an @odata.nextLink.");
+                        break;
+                    }
                 }
 
                 results[url] = allItems.ToArray();

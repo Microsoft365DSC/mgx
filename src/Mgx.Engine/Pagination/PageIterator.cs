@@ -22,8 +22,10 @@ public sealed class PageIterator
 {
     private readonly ResilientGraphClient _client;
 
-    private const int MaxConsecutiveEmptyPages = 3;
-    private const int MaxConsecutiveEmptyPagesDelta = 1000;
+    /// <summary>
+    /// Intune filters per page, so matches can follow many empty pages. Bounds endless paging only.
+    /// </summary>
+    internal const int MaxConsecutiveEmptyPages = 1000;
 
     public PageIterator(ResilientGraphClient client)
     {
@@ -57,7 +59,7 @@ public sealed class PageIterator
         bool isFirstPage = true;
         bool countCaptured = false;
         int consecutiveEmptyPages = 0;
-        var emptyPageLimit = onDeltaLink != null ? MaxConsecutiveEmptyPagesDelta : MaxConsecutiveEmptyPages;
+        var seenNextLinks = new HashSet<string>(StringComparer.Ordinal) { nextLink };
 
         while (nextLink != null)
         {
@@ -92,7 +94,7 @@ public sealed class PageIterator
             if (page.Value.Length == 0)
             {
                 consecutiveEmptyPages++;
-                if (consecutiveEmptyPages >= emptyPageLimit)
+                if (consecutiveEmptyPages >= MaxConsecutiveEmptyPages)
                     break;
             }
             else
@@ -117,6 +119,12 @@ public sealed class PageIterator
             }
 
             nextLink = NextLinkValidator.ValidateOrThrow(page.NextLink, expectedHost);
+            if (nextLink != null && !seenNextLinks.Add(nextLink) && page.Value.Length == 0)
+            {
+                _client.EnqueueWarning(
+                    "Paging stopped: an empty page repeated an @odata.nextLink.");
+                break;
+            }
             isFirstPage = false;
 
             onPageComplete?.Invoke(new PageCompletedInfo(nextLink));

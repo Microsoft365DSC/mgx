@@ -246,7 +246,7 @@ public class FaultInjectionFanOutTests
         Assert.Equal(5, looping.RequestCount);
         Assert.Equal(3, looping.CapturedRequests.Count(r => r.Uri.Contains("/g3/")));
 
-        // Empty pages: the consecutive-empty-page limit is what does stop a self-loop today.
+        // Empty pages: the repeated link stops it.
         var empty = new MockHttpHandler();
         empty.When(r => r.Uri.Contains("/g1/")).Respond(HttpStatusCode.OK, PageBody(["m1", "m2"], null));
         empty.When(r => r.Uri.Contains("/g2/")).Respond(HttpStatusCode.OK, PageBody(["m3", "m4"], null));
@@ -256,7 +256,7 @@ public class FaultInjectionFanOutTests
 
         Assert.False(stopped.HasErrors);
         Assert.Empty(stopped.Results[Url3]);
-        Assert.Equal(5, empty.RequestCount);
+        Assert.Equal(3, empty.RequestCount);
     }
 
     private static async Task PinAnExpiredTokenAtTheThirdItem(FaultEntry entry)

@@ -414,9 +414,9 @@ public class DeltaQueryTests
     }
 
     [Fact]
-    public async Task PageIterator_RegularEndpoint_StillBreaksAfter3EmptyPages()
+    public async Task PageIterator_RegularEndpoint_FollowsEmptyPagesToTheItemsBehindThem()
     {
-        // Without onDeltaLink, the regular limit of 3 applies
+        // Intune filters per page: the match can follow empty pages.
         ResiliencePipelineFactory.Reset();
         var handler = new MockHttpHandler();
 
@@ -426,6 +426,7 @@ public class DeltaQueryTests
             handler.QueueResponse(HttpStatusCode.OK,
                 $"{{\"value\": [], \"@odata.nextLink\": \"https://graph.microsoft.com/v1.0/users?$skiptoken=empty{i}\"}}");
         }
+        handler.QueueResponse(HttpStatusCode.OK, "{\"value\": [{\"id\": \"behind-empty-pages\"}]}");
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
@@ -434,13 +435,43 @@ public class DeltaQueryTests
         var items = new List<JsonElement>();
 
         await foreach (var item in iterator.StreamAllWithCountAsync(
-            "https://graph.microsoft.com/v1.0/users", 0, null)) // No onDeltaLink = regular limit
+            "https://graph.microsoft.com/v1.0/users", 0, null))
         {
             items.Add(item);
         }
 
-        Assert.Equal(2, items.Count); // Items from page 1 only
-        Assert.Equal(4, handler.RequestCount); // Page 1 + 3 empty pages (stopped at limit)
+        Assert.Equal(3, items.Count);
+        Assert.Equal("behind-empty-pages", items[2].GetProperty("id").GetString());
+        Assert.Equal(7, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task PageIterator_RegularEndpoint_StopsWhenTheServiceRepeatsANextLink()
+    {
+        ResiliencePipelineFactory.Reset();
+        var handler = new MockHttpHandler();
+
+        handler.QueueResponse(HttpStatusCode.OK, TestData.UsersPage1);
+        for (int i = 0; i < 5; i++)
+        {
+            handler.QueueResponse(HttpStatusCode.OK,
+                "{\"value\": [], \"@odata.nextLink\": \"https://graph.microsoft.com/v1.0/users?$skiptoken=loop\"}");
+        }
+
+        using var httpClient = new HttpClient(handler);
+        using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions { NoRateLimit = true });
+
+        var iterator = new PageIterator(client);
+        var items = new List<JsonElement>();
+
+        await foreach (var item in iterator.StreamAllWithCountAsync(
+            "https://graph.microsoft.com/v1.0/users", 0, null))
+        {
+            items.Add(item);
+        }
+
+        Assert.Equal(2, items.Count);
+        Assert.Equal(3, handler.RequestCount);
     }
 
     // --- StreamAllWithCountAsync also captures deltaLink ---
