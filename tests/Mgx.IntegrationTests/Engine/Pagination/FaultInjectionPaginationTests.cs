@@ -235,7 +235,7 @@ public class FaultInjectionPaginationTests
     private static async Task PinASelfReferencingNextLink()
     {
         // Non-empty pages: the link points back at the page that produced it, every time, and
-        // nothing in the iterator notices. Only the item cap ends the walk - which is why this
+        // nothing in the iterator stops it. Only the item cap ends the walk - which is why this
         // case has to pass one.
         var looping = new MockHttpHandler();
         looping.When(r => r.Uri.Contains("skiptoken=page2"))
@@ -251,7 +251,7 @@ public class FaultInjectionPaginationTests
         Assert.Equal(5, looping.RequestCount);
         Assert.Equal(3, looping.CapturedRequests.Count(r => r.Uri.Contains("skiptoken=page3")));
 
-        // Empty pages: the consecutive-empty-page limit is what does stop a self-loop today.
+        // Empty pages: the repeated link stops it.
         var empty = new MockHttpHandler();
         empty.When(r => r.Uri.Contains("skiptoken=page2"))
              .Respond(HttpStatusCode.OK, PageBody(["u3", "u4"], Page3Url));
@@ -263,7 +263,7 @@ public class FaultInjectionPaginationTests
 
         Assert.Null(emptyThrown);
         Assert.Equal(4, emptyItems.Count);
-        Assert.Equal(5, empty.RequestCount);
+        Assert.Equal(3, empty.RequestCount);
     }
 
     private static async Task PinAnExpiredTokenAtPageThree(FaultEntry entry)
