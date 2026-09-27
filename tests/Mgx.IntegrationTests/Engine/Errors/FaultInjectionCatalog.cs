@@ -249,9 +249,8 @@ public static class FaultCatalog
             Class = null,
             Production = "a page whose @odata.nextLink is its own URL",
             Cells = Cells(
-                Pinned("page 3 points back at page 3. Nothing stops a self-loop of non-empty "
-                    + "pages today - only -Top / maxItems ends it; an empty self-loop ends at "
-                    + "the consecutive-empty-page limit"),
+                Pinned("page 3 points back at page 3. Only -Top / maxItems ends a non-empty "
+                    + "self-loop; an empty one ends at the repeated link"),
                 Pinned("the third url's page points back at itself, ended the same two ways"),
                 NotApplicable(NoLinksInABatch),
                 NotApplicable(NoLinksInADownload)),

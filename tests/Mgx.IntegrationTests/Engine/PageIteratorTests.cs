@@ -112,7 +112,7 @@ public class PageIteratorTests
     }
 
     [Fact]
-    public async Task Three_consecutive_empty_pages_end_a_regular_stream()
+    public async Task A_repeated_nextLink_ends_a_regular_stream()
     {
         var handler = new StubHttpMessageHandler()
             .EnqueueRepeated(10, _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
@@ -127,7 +127,7 @@ public class PageIteratorTests
         var ids = await IdsOf(iterator.StreamAllWithCountAsync(Start, 0, null, cancellationToken: Ct));
 
         Assert.Empty(ids);
-        Assert.Equal(3, handler.RequestCount);
+        Assert.Equal(2, handler.RequestCount);
     }
 
     [Fact]
