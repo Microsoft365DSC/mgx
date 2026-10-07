@@ -1136,7 +1136,8 @@ try {
     Add-MgEnvironment -Name '$envName' -GraphEndpoint '$GraphEndpoint' -AzureADEndpoint 'https://login.microsoftonline.com' | Out-Null
     Connect-MgGraph -Environment '$envName' -AccessToken (ConvertTo-SecureString 'not-a-real-token' -AsPlainText -Force) -NoWelcome
     # -AccessToken leaves TenantId empty, and an empty TenantId reads as "not connected".
-    [Microsoft.Graph.PowerShell.Authentication.GraphSession]::Instance.AuthContext.TenantId = 'test-tenant'
+    `$graphSession = [System.AppDomain]::CurrentDomain.GetAssemblies() | ForEach-Object { `$_.GetType('Microsoft.Graph.PowerShell.Authentication.GraphSession') } | Where-Object { `$_ } | Select-Object -First 1
+    `$graphSession::Instance.AuthContext.TenantId = 'test-tenant'
 $Body
 }
 finally {
@@ -1439,12 +1440,13 @@ try {
         -AccessToken (ConvertTo-SecureString 'mock-token-not-validated' -AsPlainText -Force) -NoWelcome
     # -AccessToken auth leaves AuthContext.TenantId empty, and Mgx's auth fingerprint
     # treats an empty TenantId as "not connected" (1.0.4 identity fix). Give it a value.
-    [Microsoft.Graph.PowerShell.Authentication.GraphSession]::Instance.AuthContext.TenantId = 'mock-tenant'
+    `$graphSession = [System.AppDomain]::CurrentDomain.GetAssemblies() | ForEach-Object { `$_.GetType('Microsoft.Graph.PowerShell.Authentication.GraphSession') } | Where-Object { `$_ } | Select-Object -First 1
+    `$graphSession::Instance.AuthContext.TenantId = 'mock-tenant'
     Enable-MgxResilience -WarningAction SilentlyContinue
-    `$wrapped = [Microsoft.Graph.PowerShell.Authentication.GraphSession]::Instance.GraphHttpClient
+    `$wrapped = `$graphSession::Instance.GraphHttpClient
     Write-Output ('WRAPPED [' + `$wrapped.BaseAddress + ']')
     Disable-MgxResilience
-    `$restored = [Microsoft.Graph.PowerShell.Authentication.GraphSession]::Instance.GraphHttpClient
+    `$restored = `$graphSession::Instance.GraphHttpClient
     Write-Output ('RESTORED [' + `$restored.BaseAddress + ']')
 }
 finally {
