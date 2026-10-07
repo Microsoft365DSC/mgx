@@ -100,8 +100,8 @@ public class FanOutTests
         var handler = new MockHttpHandler();
 
         // First URL fails, second should still run (semaphore not leaked)
-        handler.QueueResponse(HttpStatusCode.InternalServerError);  // URL1 fails
-        handler.QueueResponse(HttpStatusCode.InternalServerError);  // URL1 retry fails
+        handler.QueueResponse(HttpStatusCode.BadGateway);  // URL1 fails
+        handler.QueueResponse(HttpStatusCode.BadGateway);  // URL1 retry fails
         handler.QueueResponse(HttpStatusCode.OK, TestData.UsersPage2);  // URL2 succeeds
 
         var url1 = "https://graph.microsoft.com/v1.0/groups/g1/members";

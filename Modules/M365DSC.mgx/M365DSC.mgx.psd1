@@ -1,6 +1,6 @@
 ﻿@{
     RootModule        = 'M365DSC.mgx.psm1'
-    ModuleVersion     = '2.1.8'
+    ModuleVersion     = '2.1.9'
     GUID              = 'f978315f-75c0-48f5-b929-ca7a7757d1d2'
     Author            = 'Thomas Maillo Grome, Fabien Tschanz'
     CompanyName       = 'Mgx'
@@ -49,28 +49,9 @@
             LicenseUri   = 'https://github.com/Microsoft365DSC/mgx/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/Microsoft365DSC/mgx'
             ReleaseNotes = @'
-v2.1.8
-- Fixed an issue where paging would stop after three consecutive empty pages. The limit is now 1000.
-
-v2.1.7
-- Added Invoke-MgxRequest -Envelope, emitting the payload as the service sent it, collection envelope and all, so a collection holding one item can be told from a single entity.
-- Fixed the batch retry loop waiting out its exponential fallback without regard for MaxRetryAfterSeconds, which capped only the delays a server asked for.
-
-v2.1.6
-- Merged upstream gromedev/mgx 2.1.2 through 2.1.5.
-- Fixed a Graph error reporting only its top level message: the property that was actually wrong sat in the innerError of the response and was discarded.
-
-v2.1.1
-- Fixed Invoke-MgxRequest failing with a missing System.IO.Pipelines assembly on PowerShell 7.6 hosts that do not ship it.
-
-v2.1.0
-- Added Get-MgxContent, downloading file and media content whole or by byte range.
-- Added adaptive request pacing, on by default, spacing requests per workload ahead of the token bucket. Opt out with Set-MgxOption -NoAdaptivePacing.
-- Added Sync-MgxDelta -CheckpointPath, -Latest and -Prefer, with drive delta support and crash resume.
-- Fixed -Top being discarded when combined with -All.
-- Fixed enumeration returning a partial collection without error when a nextLink was refused.
-- Fixed -Debug writing pre-authenticated download URLs verbatim.
-- Merged upstream gromedev/mgx 2.1.1.
+v2.1.9
+- Fixed the auth-only HTTP client falling back to the SDK client with Microsoft.Graph.Authentication 2.41 and later.
+- A 500 is no longer retried and no longer counts toward the circuit breaker. CircuitBreakerMinThroughput now defaults to 100.
 '@
         }
     }

@@ -597,9 +597,9 @@ public class DeltaQueryTests
         ResiliencePipelineFactory.Reset();
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, DeltaPage1);
-        // Queue enough 500s to exhaust Polly retries (1 initial + 1 retry = 2 attempts)
-        handler.QueueResponse(HttpStatusCode.InternalServerError);
-        handler.QueueResponse(HttpStatusCode.InternalServerError);
+        // Queue enough 502s to exhaust Polly retries (1 initial + 1 retry = 2 attempts)
+        handler.QueueResponse(HttpStatusCode.BadGateway);
+        handler.QueueResponse(HttpStatusCode.BadGateway);
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions
@@ -640,7 +640,7 @@ public class DeltaQueryTests
         }
         catch (GraphServiceException)
         {
-            // Expected: 500 error on page 2
+            // Expected: 502 error on page 2
             Assert.False(File.Exists(outputPath), "Final output file should not exist after error");
         }
         finally
@@ -858,9 +858,9 @@ public class DeltaQueryTests
         // Trip the circuit breaker, then verify it throws BrokenCircuitException
         ResiliencePipelineFactory.Reset();
         var handler = new MockHttpHandler();
-        // Queue enough 500s to trip the circuit breaker (default: 10% failure over 40 requests)
+        // Queue enough 502s to trip the circuit breaker (default: 10% failure over 40 requests)
         for (int i = 0; i < 50; i++)
-            handler.QueueResponse(HttpStatusCode.InternalServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway);
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, new ResilientGraphClientOptions
@@ -886,7 +886,7 @@ public class DeltaQueryTests
         {
             threw = true;
         }
-        catch { } // Other exceptions from the 500s are also acceptable
+        catch { } // Other exceptions from the 502s are also acceptable
 
         // Circuit breaker should have tripped at some point
         var summary = MgxTelemetryCollector.Current.GetSummary();
@@ -1031,8 +1031,8 @@ public class DeltaQueryTests
         var handler = new MockHttpHandler();
         var errorBody = """{"error":{"code":"InternalServerError","message":"Something broke"}}""";
         handler.QueueResponse(HttpStatusCode.OK, DeltaPage1); // Page 1 succeeds
-        handler.QueueResponse(HttpStatusCode.InternalServerError, errorBody); // Page 2 fails
-        handler.QueueResponse(HttpStatusCode.InternalServerError, errorBody); // Polly retry also fails
+        handler.QueueResponse(HttpStatusCode.BadGateway, errorBody); // Page 2 fails
+        handler.QueueResponse(HttpStatusCode.BadGateway, errorBody); // Polly retry also fails
 
         // Limit retries: the default would need eight error responses queued.
         using var transport = MgxTransportScope.Inject(handler,
@@ -1060,7 +1060,7 @@ public class DeltaQueryTests
             var tmpFiles = Directory.GetFiles(dir, Path.GetFileName(outputPath) + ".*.tmp");
             Assert.Empty(tmpFiles);
             // Should have errors
-            Assert.True(ps.HadErrors, "Should have errors from 500 response");
+            Assert.True(ps.HadErrors, "Should have errors from 502 response");
         }
         finally
         {
@@ -1075,9 +1075,9 @@ public class DeltaQueryTests
         // #10: Trip the circuit breaker, then invoke the cmdlet.
         // The cmdlet should catch BrokenCircuitException and write an ErrorRecord.
         var handler = new MockHttpHandler();
-        // Queue enough 500s to trip the breaker
+        // Queue enough 502s to trip the breaker
         for (int i = 0; i < 20; i++)
-            handler.QueueResponse(HttpStatusCode.InternalServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway);
 
         // Aggressive circuit-breaker settings so it trips quickly.
         using var transport = MgxTransportScope.Inject(handler,
@@ -1109,8 +1109,8 @@ public class DeltaQueryTests
               .AddParameter("DeltaPath", deltaPath);
             ps.Invoke();
 
-            // Should have errors (either GraphError from 500 or CircuitBroken)
-            Assert.True(ps.HadErrors, "Should have errors from circuit breaker or 500");
+            // Should have errors (either GraphError from 502 or CircuitBroken)
+            Assert.True(ps.HadErrors, "Should have errors from circuit breaker or 502");
         }
         finally
         {
@@ -1409,14 +1409,14 @@ public class DeltaQueryTests
     [Fact]
     public void Cmdlet_Checkpoint_SurvivesCrash_ThenResumesAndDeletesOnSuccess()
     {
-        // Run 1 (pipeline mode): page 1 succeeds, page 2 dies on 500s. The page-boundary
+        // Run 1 (pipeline mode): page 1 succeeds, page 2 dies on 502s. The page-boundary
         // checkpoint must survive. Run 2: resumes from page 2's link (not from scratch),
         // completes, deletes the checkpoint, and saves delta state.
         var handler = new MockHttpHandler();
         var errorBody = """{"error":{"code":"InternalServerError","message":"boom"}}""";
         handler.QueueResponse(HttpStatusCode.OK, DeltaPage1);
-        handler.QueueResponse(HttpStatusCode.InternalServerError, errorBody);
-        handler.QueueResponse(HttpStatusCode.InternalServerError, errorBody);
+        handler.QueueResponse(HttpStatusCode.BadGateway, errorBody);
+        handler.QueueResponse(HttpStatusCode.BadGateway, errorBody);
 
         using var transport = MgxTransportScope.Inject(handler,
             options: new ResilientGraphClientOptions { NoRateLimit = true, MaxRetryAttempts = 1 });
@@ -1434,7 +1434,7 @@ public class DeltaQueryTests
                   .AddParameter("CheckpointPath", cpPath);
                 var run1 = ps.Invoke();
 
-                Assert.True(ps.HadErrors, "run 1 should fail on the 500s");
+                Assert.True(ps.HadErrors, "run 1 should fail on the 502s");
                 Assert.Equal(2, run1.Count); // page 1 was emitted before the crash
             }
 

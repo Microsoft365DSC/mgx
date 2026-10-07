@@ -58,7 +58,7 @@ public class DeltaRecoveryTests
     }
 
     /// <summary>
-    /// The steady-state failure: a completed run, then a run that dies on a transient 500
+    /// The steady-state failure: a completed run, then a run that dies on a transient 502
     /// partway through. The dead run's temp holds the pages the checkpoint counts. If that
     /// temp is discarded, the next run sees checkpoint + output + no temp - which is the
     /// ROUTINE "nothing to promote" state - resumes in append mode, and the token advances
@@ -78,8 +78,8 @@ public class DeltaRecoveryTests
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, Baseline);                        // run 1
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                    // run 2, page 1
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);    // run 2, page 2
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);    // ... and its retry
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);    // run 2, page 2
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);    // ... and its retry
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage2);                    // run 3 resumes
 
         using var transport = MgxTransportScope.Inject(handler);
@@ -163,8 +163,8 @@ public class DeltaRecoveryTests
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, Baseline);                        // run 1
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                    // run 2, page 1
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);    // run 2 dies
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);    // run 2 dies
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                    // run 3 re-enumerates
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage2);
 
@@ -208,8 +208,8 @@ public class DeltaRecoveryTests
 
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage2);
 
         using var transport = MgxTransportScope.Inject(handler);
@@ -246,7 +246,7 @@ public class DeltaRecoveryTests
         var outputPath = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -293,8 +293,8 @@ public class DeltaRecoveryTests
 
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                    // run 1, page 1
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);    // run 1, page 2
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);    // ... and its retry
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);    // run 1, page 2
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);    // ... and its retry
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage2);                    // run 2 resumes
 
         using var transport = MgxTransportScope.Inject(handler);
@@ -344,8 +344,8 @@ public class DeltaRecoveryTests
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, Baseline);                        // run 1
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                    // run 2, page 1
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);    // run 2 dies
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);    // run 2 dies
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage2);                    // run 3 resumes
 
         using var transport = MgxTransportScope.Inject(handler);
@@ -420,8 +420,8 @@ public class DeltaRecoveryTests
         var outputPath = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
 
         using var transport = MgxTransportScope.Inject(handler);
         try
@@ -450,8 +450,8 @@ public class DeltaRecoveryTests
 
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
         handler.QueueResponse(HttpStatusCode.OK,
             """{"value":[],"@odata.deltaLink":"https://graph.microsoft.com/v1.0/users/delta?$deltatoken=FROMNOW"}""");
 

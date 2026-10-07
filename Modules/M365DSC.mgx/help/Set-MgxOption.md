@@ -134,7 +134,7 @@ Accept wildcard characters: False
 ```
 
 ### -CircuitBreakerMinThroughput
-Minimum number of requests in the sampling window before the circuit breaker evaluates failure ratio. Range: 2-1000. Default: 40. Two is the least the breaker will hold; a ratio over a single request is not a measurement.
+Minimum number of requests in the sampling window before the circuit breaker evaluates failure ratio. Range: 2-1000. Default: 100. Two is the least the breaker will hold; a ratio over a single request is not a measurement.
 
 ```yaml
 Type: Int32
@@ -143,7 +143,7 @@ Aliases:
 
 Required: False
 Position: Named
-Default value: 40
+Default value: 100
 Accept pipeline input: False
 Accept wildcard characters: False
 ```

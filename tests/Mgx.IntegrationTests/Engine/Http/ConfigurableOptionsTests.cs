@@ -112,7 +112,7 @@ public class ConfigurableOptionsTests
         Assert.Equal(30, options.AttemptTimeoutSeconds);
         Assert.Equal(15, options.CircuitBreakerDurationSeconds);
         Assert.Equal(0.1, options.CircuitBreakerFailureRatio);
-        Assert.Equal(40, options.CircuitBreakerMinThroughput);
+        Assert.Equal(100, options.CircuitBreakerMinThroughput);
         Assert.Equal(30, options.CircuitBreakerSamplingDurationSeconds);
         Assert.Equal(1, options.BatchChunkConcurrency);
         Assert.Equal(20, options.BatchItemsPerSecond);

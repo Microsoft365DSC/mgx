@@ -550,7 +550,8 @@ public abstract class MgxCmdletBase : MgxCmdletCore
             if (authProvider == null) return null;
 
             var authHandlerType = FindType(
-                "Microsoft.Graph.PowerShell.Authentication.Handlers.AuthenticationHandler");
+                    "Microsoft.Graph.PowerShell.Authentication.Core.Http.AuthenticationHandler")
+                ?? FindType("Microsoft.Graph.PowerShell.Authentication.Handlers.AuthenticationHandler");
             if (authHandlerType == null) return null;
 
             var innerHandler = new SocketsHttpHandler
