@@ -12,22 +12,23 @@ public static class MgxErrorPolicy
     /// (matches the Kiota SDK); server and transport failures retry only when the method is
     /// idempotent, because a 5xx or a dead connection may mean a write was already applied.
     /// </summary>
-    public static bool ShouldRetry(MgxErrorClass cls, bool isIdempotent) => cls switch
+    public static bool ShouldRetry(in MgxErrorInfo info, bool isIdempotent) => info.Class switch
     {
         MgxErrorClass.Throttle => true,
-        MgxErrorClass.TransientServer or MgxErrorClass.TransientTransport => isIdempotent,
+        MgxErrorClass.TransientServer => isIdempotent && info.StatusCode != 500,
+        MgxErrorClass.TransientTransport => isIdempotent,
         _ => false,
     };
 
     /// <summary>
     /// Whether the failure counts toward opening the circuit breaker.
-    /// 429 and 408 are excluded deliberately: 429 is the service pacing us, not failing -
+    /// 429, 408 and 500 are excluded deliberately: 429 is the service pacing us, not failing -
     /// Retry-After handles it, and counting it would open the circuit exactly when the
     /// correct response is to slow down and keep going. 408 is a client-perceived timeout,
     /// not a server-side failure indicator.
     /// </summary>
     public static bool CountsAsCircuitFailure(in MgxErrorInfo info) =>
-        info.Class == MgxErrorClass.TransientServer
+        (info.Class == MgxErrorClass.TransientServer && info.StatusCode != 500)
         || (info.Class == MgxErrorClass.TransientTransport && info.StatusCode != 408);
 
     /// <summary>

@@ -105,7 +105,7 @@ public class ErrorActionMatrixTests
             // The priming run's two failed attempts meet the minimum throughput at a failure
             // ratio of 1.0, so the breaker is open before the measured pipeline runs.
             case "CircuitBreaker":
-                wire.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerErrorBody);
+                wire.SetDefaultResponse(HttpStatusCode.BadGateway, ServerErrorBody);
                 return new Cell(
                     wire,
                     new ResilientGraphClientOptions

@@ -169,8 +169,8 @@ public class DeltaCheckpointIntegrityTests
         {
             var handler = new MockHttpHandler();
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                  // run 1: b1,b2
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                  // run 2 re-enumerates
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage2Final);
             using var transport = MgxTransportScope.Inject(handler);
@@ -214,8 +214,8 @@ public class DeltaCheckpointIntegrityTests
         {
             var handler = new MockHttpHandler();
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage2Final);
             using var transport = MgxTransportScope.Inject(handler);
 
@@ -253,11 +253,11 @@ public class DeltaCheckpointIntegrityTests
         {
             var handler = new MockHttpHandler();
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                  // run 1: b1,b2
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage2);                  // run 2: adopts, adds b3
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                  // run 3 re-enumerates
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage2);
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage3);
@@ -298,11 +298,11 @@ public class DeltaCheckpointIntegrityTests
         {
             var handler = new MockHttpHandler();
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                  // run 1: b1,b2
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage2);                  // run 2: adopts, adds b3
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage3);                  // run 3: b4
             using var transport = MgxTransportScope.Inject(handler);
 
@@ -341,10 +341,10 @@ public class DeltaCheckpointIntegrityTests
         {
             var handler = new MockHttpHandler();
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                  // run 1: b1,b2
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);  // run 2: adopts, then dies
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);  // run 2: adopts, then dies
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage2Final);             // run 3: b3
             using var transport = MgxTransportScope.Inject(handler);
 
@@ -454,8 +454,8 @@ public class DeltaCheckpointIntegrityTests
         {
             var handler = new MockHttpHandler();
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
-            handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
+            handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
             handler.QueueResponse(HttpStatusCode.OK, ChangesPage2Final);
             using var transport = MgxTransportScope.Inject(handler);
 
@@ -598,7 +598,7 @@ public class DeltaCheckpointIntegrityTests
             var before = File.ReadAllBytes(env.CheckpointPath);
 
             var handler = new MockHttpHandler();
-            handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+            handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
             using var transport = MgxTransportScope.Inject(handler);
 
             // The interrupted run never promoted its output, so this is the branch that used to
@@ -628,7 +628,7 @@ public class DeltaCheckpointIntegrityTests
             var before = File.ReadAllBytes(env.CheckpointPath);
 
             var handler = new MockHttpHandler();
-            handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+            handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
             using var transport = MgxTransportScope.Inject(handler);
 
             SyncToPipeline(env);
@@ -663,7 +663,7 @@ public class DeltaCheckpointIntegrityTests
             }.Save(env.CheckpointPath);
 
             var handler = new MockHttpHandler();
-            handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+            handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
             using var transport = MgxTransportScope.Inject(handler);
 
             SyncToPipeline(env);

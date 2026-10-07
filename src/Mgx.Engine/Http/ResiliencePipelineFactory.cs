@@ -167,7 +167,7 @@ public static class ResiliencePipelineFactory
                         : args.Outcome.Exception is { } ex
                             ? MgxErrorClassifier.Classify(ex, args.Context.CancellationToken.IsCancellationRequested)
                             : new MgxErrorInfo(MgxErrorClass.Permanent, 0);
-                    return ValueTask.FromResult(MgxErrorPolicy.ShouldRetry(info.Class, isIdempotent));
+                    return ValueTask.FromResult(MgxErrorPolicy.ShouldRetry(info, isIdempotent));
                 },
                 DelayGenerator = args =>
                     // Respect Retry-After from the service; null falls back to the
