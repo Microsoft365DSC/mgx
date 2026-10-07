@@ -1,5 +1,16 @@
 ﻿# Changelog
 
+## 2.1.9
+
+### Fixed
+
+- Fixed `Could not build auth-only HTTP client. Falling back to SDK client.` with Microsoft.Graph.Authentication 2.41 and later, which moved its authentication handler.
+- A 500 is no longer retried and no longer counts toward the circuit breaker. One endpoint returning 500 on every request opened the circuit and stopped all other requests.
+
+### Changed
+
+- `CircuitBreakerMinThroughput` defaults to 100 instead of 40.
+
 ## 2.1.8
 
 ### Fixed
