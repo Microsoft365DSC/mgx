@@ -1039,6 +1039,6 @@ public sealed class GraphBatchClient
     /// </summary>
     private static bool IsRetryable(int statusCode, string method)
         => MgxErrorPolicy.ShouldRetry(
-            MgxErrorClassifier.Classify(statusCode).Class,
+            MgxErrorClassifier.Classify(statusCode),
             isIdempotent: !string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase));
 }

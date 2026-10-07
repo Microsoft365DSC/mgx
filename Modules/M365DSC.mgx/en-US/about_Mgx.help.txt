@@ -124,15 +124,15 @@ RESILIENCE
         throttling. Default: 200 burst, 50 tokens replenished per second.
 
     Retry with exponential backoff
-        Retries transient failures (HTTP 429, 500, 502, 503, 504) up to 7
+        Retries transient failures (HTTP 429, 502, 503, 504) up to 7
         times with exponentially increasing delays and jitter. Honors the
         Retry-After header when present.
 
     Circuit breaker
         Opens the circuit after 10% failure ratio over a 30-second
-        sampling window (minimum 40 requests), rejecting requests for
-        15 seconds before retesting. Trips on 500/502/503/504; does not
-        trip on 429.
+        sampling window (minimum 100 requests), rejecting requests for
+        15 seconds before retesting. Trips on 502/503/504; does not
+        trip on 429 or 500.
 
     Timeout
         Per-attempt timeout (default 30s) and total timeout across all

@@ -21,7 +21,7 @@ public sealed class ResilientGraphClientOptions
     private readonly int _attemptTimeoutSeconds = 30;
     private readonly int _circuitBreakerDurationSeconds = 15;
     private readonly double _circuitBreakerFailureRatio = 0.1;
-    private readonly int _circuitBreakerMinThroughput = 40;
+    private readonly int _circuitBreakerMinThroughput = 100;
     private readonly int _circuitBreakerSamplingDurationSeconds = 30;
 
     // Batch configuration
@@ -127,7 +127,7 @@ public sealed class ResilientGraphClientOptions
     }
 
     /// <summary>
-    /// Minimum requests before circuit breaker evaluates. Range: 2-1,000. Default: 40.
+    /// Minimum requests before circuit breaker evaluates. Range: 2-1,000. Default: 100.
     /// The floor is 2 because that is the least Polly's breaker will hold: a lower value is
     /// refused when the pipeline is built, one call after the option was set and in Polly's
     /// words, so it is refused here instead.

@@ -325,12 +325,12 @@ public class CircuitBreakerTests
     }
 
     [Fact]
-    public async Task CircuitBreaker_DefaultMinThroughput40_DoesNotTripBelow40()
+    public async Task CircuitBreaker_DefaultMinThroughput100_DoesNotTripBelow100()
     {
-        // Verifies the default MinThroughput=40 boundary.
+        // Verifies the default MinThroughput=100 boundary.
         // With MaxRetryAttempts=1, each call produces 2 CB outcomes (initial + 1 retry).
-        // 19 calls = 38 outcomes = below MinThroughput of 40, should NOT trip.
-        // 20th call = 40 outcomes = meets MinThroughput, should trip.
+        // 49 calls = 98 outcomes = below MinThroughput of 100, should NOT trip.
+        // 50th call = 100 outcomes = meets MinThroughput, should trip.
         // Same pipeline throughout (no Reset between phases).
         ResiliencePipelineFactory.Reset();
         var handler = new MockHttpHandler();
@@ -345,33 +345,33 @@ public class CircuitBreakerTests
             CircuitBreakerSamplingDurationSeconds = 30,
             TotalTimeoutSeconds = 30,
             AttemptTimeoutSeconds = 10
-            // CircuitBreakerMinThroughput defaults to 40
+            // CircuitBreakerMinThroughput defaults to 100
         };
 
         using var httpClient = new HttpClient(handler);
         using var client = new ResilientGraphClient(httpClient, options);
 
-        // Phase 1: Send 19 calls = 38 CB outcomes (below MinThroughput of 40)
+        // Phase 1: Send 49 calls = 98 CB outcomes (below MinThroughput of 100)
         bool tripped = false;
-        for (int i = 0; i < 19; i++)
+        for (int i = 0; i < 49; i++)
         {
             try { await client.GetAsync($"https://graph.microsoft.com/v1.0/test/{i}"); }
             catch (Polly.CircuitBreaker.BrokenCircuitException) { tripped = true; break; }
             catch { }
         }
 
-        Assert.False(tripped, "CB should NOT trip with only 38 outcomes (below MinThroughput of 40)");
+        Assert.False(tripped, "CB should NOT trip with only 98 outcomes (below MinThroughput of 100)");
 
-        // Phase 2: Send 1 more call through the SAME pipeline (outcomes 39-40, meets threshold)
+        // Phase 2: Send 1 more call through the SAME pipeline (outcomes 99-100, meets threshold)
         tripped = false;
-        for (int i = 19; i < 25; i++)
+        for (int i = 49; i < 55; i++)
         {
             try { await client.GetAsync($"https://graph.microsoft.com/v1.0/test/{i}"); }
             catch (Polly.CircuitBreaker.BrokenCircuitException) { tripped = true; break; }
             catch { }
         }
 
-        Assert.True(tripped, "CB should trip once MinThroughput of 40 outcomes is reached with 100% failures");
+        Assert.True(tripped, "CB should trip once MinThroughput of 100 outcomes is reached with 100% failures");
 
         ResiliencePipelineFactory.Reset();
     }

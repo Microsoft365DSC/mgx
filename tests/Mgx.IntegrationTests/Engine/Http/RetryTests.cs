@@ -212,9 +212,8 @@ public class RetryTests
     }
 
     [Fact]
-    public async Task Retry_GetRetriesOn500()
+    public async Task Retry_GetDoesNotRetryOn500()
     {
-        // GET on 500 IS safe to retry (idempotent method).
         var handler = new MockHttpHandler();
         handler.QueueFailuresThenSuccess(
             failCount: 1,
@@ -226,8 +225,8 @@ public class RetryTests
 
         var response = await client.GetAsync("https://graph.microsoft.com/v1.0/users/user1");
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(2, handler.RequestCount);
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal(1, handler.RequestCount);
     }
 
     [Fact]

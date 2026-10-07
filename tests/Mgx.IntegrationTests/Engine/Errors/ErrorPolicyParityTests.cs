@@ -24,18 +24,18 @@ public class ErrorPolicyParityTests
     {
         if (status == 429) return true;
         if (!isIdempotent) return false;
-        return status is 500 or 502 or 503 or 504 or 408;
+        return status is 502 or 503 or 504 or 408;
     }
 
     // ResiliencePipelineFactory.cs circuit-breaker predicate, as it stood.
-    private static bool OracleCircuit(int status) => status is 500 or 502 or 503 or 504;
+    private static bool OracleCircuit(int status) => status is 502 or 503 or 504;
 
     // GraphBatchClient.IsRetryable, as it stood.
     private static bool OracleBatch(int status, string method)
     {
         if (status == 429) return true;
         if (string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase)) return false;
-        return status is 408 or 500 or 502 or 503 or 504;
+        return status is 408 or 502 or 503 or 504;
     }
 
     // GraphContentClient download pipeline ShouldHandle, as it stood.
@@ -52,9 +52,9 @@ public class ErrorPolicyParityTests
     [MemberData(nameof(AllStatuses))]
     public void Retry_decision_matches_the_old_predicate_for_every_status(int status)
     {
-        var cls = MgxErrorClassifier.Classify(status).Class;
-        Assert.Equal(OracleRetry(status, isIdempotent: true), MgxErrorPolicy.ShouldRetry(cls, isIdempotent: true));
-        Assert.Equal(OracleRetry(status, isIdempotent: false), MgxErrorPolicy.ShouldRetry(cls, isIdempotent: false));
+        var info = MgxErrorClassifier.Classify(status);
+        Assert.Equal(OracleRetry(status, isIdempotent: true), MgxErrorPolicy.ShouldRetry(info, isIdempotent: true));
+        Assert.Equal(OracleRetry(status, isIdempotent: false), MgxErrorPolicy.ShouldRetry(info, isIdempotent: false));
     }
 
     [Theory]
@@ -97,7 +97,7 @@ public class ErrorPolicyParityTests
         // Retry predicate: HttpRequestException retried (idempotent only, via the gate);
         // TaskCanceled/TimeoutRejected retried unless the caller cancelled; everything else not.
         static bool Retry(Exception ex, bool cancelled, bool idempotent)
-            => MgxErrorPolicy.ShouldRetry(MgxErrorClassifier.Classify(ex, cancelled).Class, idempotent);
+            => MgxErrorPolicy.ShouldRetry(MgxErrorClassifier.Classify(ex, cancelled), idempotent);
 
         Assert.True(Retry(new HttpRequestException(), cancelled: false, idempotent: true));
         Assert.False(Retry(new HttpRequestException(), cancelled: false, idempotent: false));
@@ -139,7 +139,7 @@ public class ErrorPolicyParityTests
         static (bool Retry, bool Circuit) Decide(Exception ex)
         {
             var info = MgxErrorClassifier.Classify(ex, cancellationRequested: false);
-            return (MgxErrorPolicy.ShouldRetry(info.Class, isIdempotent: true),
+            return (MgxErrorPolicy.ShouldRetry(info, isIdempotent: true),
                     MgxErrorPolicy.CountsAsCircuitFailure(info));
         }
 
@@ -150,7 +150,7 @@ public class ErrorPolicyParityTests
         // And the narrowing: a per-attempt timeout after the caller cancelled no longer
         // retries (2.1.2's fix, preserved through classification).
         var cancelled = MgxErrorClassifier.Classify(new TimeoutRejectedException(), cancellationRequested: true);
-        Assert.False(MgxErrorPolicy.ShouldRetry(cancelled.Class, isIdempotent: true));
+        Assert.False(MgxErrorPolicy.ShouldRetry(cancelled, isIdempotent: true));
         Assert.False(MgxErrorPolicy.CountsAsCircuitFailure(cancelled));
     }
 

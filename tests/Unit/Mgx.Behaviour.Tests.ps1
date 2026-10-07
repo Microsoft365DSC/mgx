@@ -582,7 +582,7 @@ Describe 'Get-MgxOption' {
         $result.AttemptTimeoutSeconds | Should -Be 30
         $result.CircuitBreakerDurationSeconds | Should -Be 15
         $result.CircuitBreakerFailureRatio | Should -Be 0.1
-        $result.CircuitBreakerMinThroughput | Should -Be 40
+        $result.CircuitBreakerMinThroughput | Should -Be 100
         $result.RateLimitQueueLimit | Should -Be 500
         $result.NoRateLimit | Should -BeFalse
         $result.CircuitBreakerSamplingDurationSeconds | Should -Be 30
@@ -711,7 +711,7 @@ Describe 'Set-MgxOption Pipeline Parameters' {
         $result.RateLimitPerSecond | Should -Be 50
         $result.CircuitBreakerDurationSeconds | Should -Be 15
         $result.CircuitBreakerFailureRatio | Should -Be 0.1
-        $result.CircuitBreakerMinThroughput | Should -Be 40
+        $result.CircuitBreakerMinThroughput | Should -Be 100
         $result.RateLimitQueueLimit | Should -Be 500
         $result.CircuitBreakerSamplingDurationSeconds | Should -Be 30
         $result.BatchChunkConcurrency | Should -Be 1
@@ -762,7 +762,7 @@ Describe 'Set-MgxOption Pipeline Parameters' {
         $result.RateLimitPerSecond | Should -Be 50
         $result.CircuitBreakerDurationSeconds | Should -Be 15
         $result.CircuitBreakerFailureRatio | Should -Be 0.1
-        $result.CircuitBreakerMinThroughput | Should -Be 40
+        $result.CircuitBreakerMinThroughput | Should -Be 100
         $result.RateLimitQueueLimit | Should -Be 500
         $result.NoRateLimit | Should -BeFalse
         $result.CircuitBreakerSamplingDurationSeconds | Should -Be 30

@@ -273,9 +273,9 @@ public class BatchWriteTests
     }
 
     [Fact]
-    public async Task BatchGet_500Retries()
+    public async Task BatchGet_DoesNotRetryOn500()
     {
-        // GET items should retry on 500 (aligned with ResiliencePipelineFactory)
+        // GET items should NOT retry on 500 (aligned with ResiliencePipelineFactory)
         var get500Response = """
         {
             "responses": [
@@ -302,9 +302,9 @@ public class BatchWriteTests
         var operations = new List<BatchOperation> { new("/users/user1", "GET") };
         var result = await batchClient.ExecuteBatchIndexedAsync(operations);
 
-        Assert.Equal(2, handler.RequestCount); // Retried on 500
+        Assert.Equal(1, handler.RequestCount); // No retry on 500
         Assert.Single(result.Results);
-        Assert.Equal(200, result.Results[0].Response.Status);
+        Assert.Equal(500, result.Results[0].Response.Status);
     }
 
     [Fact]

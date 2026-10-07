@@ -328,10 +328,10 @@ public class DeltaSharedCheckpointTests
 
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                 // A run 1, page 1
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError); // A run 1, page 2
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError); // A run 2 promotes, then dies
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError); // A run 1, page 2
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError); // A run 2 promotes, then dies
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                 // B, page 1
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage2);                 // B, page 2
         using var transport = MgxTransportScope.Inject(handler);
@@ -379,10 +379,10 @@ public class DeltaSharedCheckpointTests
 
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                 // A run 1, page 1
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError); // A run 1, page 2
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError); // A run 2 promotes, then dies
-        handler.QueueResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError); // A run 1, page 2
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError); // A run 2 promotes, then dies
+        handler.QueueResponse(HttpStatusCode.BadGateway, ServerError);
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);                 // B, page 1
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage2);                 // B, page 2
         using var transport = MgxTransportScope.Inject(handler);
@@ -427,7 +427,7 @@ public class DeltaSharedCheckpointTests
 
         var handler = new MockHttpHandler();
         handler.QueueResponse(HttpStatusCode.OK, ChangesPage1);
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -585,7 +585,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -638,7 +638,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -694,7 +694,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -741,7 +741,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -815,7 +815,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -869,7 +869,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -926,7 +926,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -982,7 +982,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1033,7 +1033,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1105,7 +1105,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1162,7 +1162,7 @@ public class DeltaSharedCheckpointTests
         var theirs = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1216,7 +1216,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1280,7 +1280,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1329,7 +1329,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1384,7 +1384,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1429,7 +1429,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1479,7 +1479,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1519,7 +1519,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1570,7 +1570,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1621,7 +1621,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1679,7 +1679,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1726,7 +1726,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1773,7 +1773,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1816,7 +1816,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1893,7 +1893,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -1999,7 +1999,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -2093,7 +2093,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -2183,7 +2183,7 @@ public class DeltaSharedCheckpointTests
         using var released = new ManualResetEventSlim(false);
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -2282,7 +2282,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -2348,7 +2348,7 @@ public class DeltaSharedCheckpointTests
         var checkpointPath = Path.Combine(dir, "run.checkpoint");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -2429,7 +2429,7 @@ public class DeltaSharedCheckpointTests
         using var released = new ManualResetEventSlim(false);
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -2529,7 +2529,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -2606,7 +2606,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -2680,7 +2680,7 @@ public class DeltaSharedCheckpointTests
         try
         {
             var setup = new MockHttpHandler();
-            setup.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+            setup.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
             using (MgxTransportScope.Inject(setup))
             {
                 InterruptedIntoATemp(setup, deltaPath, checkpointPath, output);
@@ -2821,7 +2821,7 @@ public class DeltaSharedCheckpointTests
         var deltaPath = Path.Combine(dir, "state.json");
         var output = Path.Combine(dir, "out.jsonl");
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -2880,7 +2880,7 @@ public class DeltaSharedCheckpointTests
         var deltaPath = Path.Combine(dir, "state.json");
         var output = Path.Combine(dir, "out.jsonl");
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -2938,7 +2938,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
         var adopt = $"{output}.adopt";
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -3002,7 +3002,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -3088,7 +3088,7 @@ public class DeltaSharedCheckpointTests
         var output = Path.Combine(dir, "out.jsonl");
 
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -3254,7 +3254,7 @@ public class DeltaSharedCheckpointTests
         var usersState = Path.Combine(dir, "users-state.json");
         var output = Path.Combine(dir, "out.jsonl");
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {
@@ -3317,7 +3317,7 @@ public class DeltaSharedCheckpointTests
         var deltaPath = Path.Combine(dir, "state.json");
         var output = Path.Combine(dir, "out.jsonl");
         var handler = new MockHttpHandler();
-        handler.SetDefaultResponse(HttpStatusCode.InternalServerError, ServerError);
+        handler.SetDefaultResponse(HttpStatusCode.BadGateway, ServerError);
         using var transport = MgxTransportScope.Inject(handler);
         try
         {

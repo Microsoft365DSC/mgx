@@ -347,16 +347,16 @@ public static class FaultCatalog
     /// <summary>What the retry policy says about this fault on an idempotent request (a GET page,
     /// a fan-out read).</summary>
     public static bool RetriedOnAnIdempotentRequest(FaultEntry entry) =>
-        entry.Class is { } cls && MgxErrorPolicy.ShouldRetry(cls, isIdempotent: true);
+        entry.Class is { } cls && MgxErrorPolicy.ShouldRetry(new MgxErrorInfo(cls, entry.Status), isIdempotent: true);
 
     /// <summary>What it says on a non-idempotent request - the $batch POST itself.</summary>
     public static bool RetriedOnANonIdempotentRequest(FaultEntry entry) =>
-        entry.Class is { } cls && MgxErrorPolicy.ShouldRetry(cls, isIdempotent: false);
+        entry.Class is { } cls && MgxErrorPolicy.ShouldRetry(new MgxErrorInfo(cls, entry.Status), isIdempotent: false);
 
     /// <summary>What it says about a $batch sub-response carrying this fault's status.</summary>
     public static bool RetriedAsABatchItem(FaultEntry entry, string method) =>
         entry.Class is { } cls && MgxErrorPolicy.ShouldRetry(
-            cls, isIdempotent: !string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase));
+            new MgxErrorInfo(cls, entry.Status), isIdempotent: !string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>What the download-host retry filter says about it.</summary>
     public static bool RetriedByTheDownloadPipeline(FaultEntry entry, Exception? exception) =>
