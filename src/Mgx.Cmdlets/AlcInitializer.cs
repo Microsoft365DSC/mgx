@@ -7,9 +7,9 @@ namespace Mgx.Cmdlets;
 
 /// <summary>
 /// Assembly Load Context initializer for dependency isolation.
-/// Reuses assemblies already loaded in any ALC (including Microsoft.Graph's
-/// msgraph-load-context) to avoid type identity conflicts. Only loads from
-/// the Dependencies folder for assemblies not found anywhere.
+/// Targets only assemblies that are available in the Dependencies folder. Reuses already
+/// loaded ones in any ALC (including Microsoft.Graph's msgraph-load-context) to avoid
+/// type identity conflicts, and loads from the Dependencies folder otherwise.
 /// Pattern adopted from Mge project's ALC coexistence investigation.
 ///
 /// Dependencies/ is not only mgx's own third-party packages. It also carries assemblies the
@@ -42,10 +42,25 @@ public class AlcInitializer : IModuleAssemblyInitializer, IModuleAssemblyCleanup
         Base.MgxCmdletBase.AttachAssemblyLoadHandler();
     }
 
-    internal static Assembly? ResolveDependency(AssemblyLoadContext defaultAlc, AssemblyName name)
+    internal static Assembly? ResolveDependency(AssemblyLoadContext defaultAlc, AssemblyName name) =>
+        ResolveDependency(defaultAlc, name, DepsPath);
+
+    /// <summary>
+    /// Resolves an assembly the Default ALC could not find, but only those that are in the Dependencies/ folder.
+    /// </summary>
+    /// <param name="defaultAlc">The Default ALC raising the event.</param>
+    /// <param name="name">The requested assembly.</param>
+    /// <param name="depsPath">The folder containing the assemblies this module can resolve.</param>
+    /// <returns>The resolved assembly, or null to leave the request to the next resolver.</returns>
+    internal static Assembly? ResolveDependency(AssemblyLoadContext defaultAlc, AssemblyName name, string depsPath)
     {
         try
         {
+            // Default.Resolving runs before other modules' AppDomain.AssemblyResolve handlers
+            var dllPath = Path.Combine(depsPath, $"{name.Name}.dll");
+            if (!File.Exists(dllPath))
+                return null;
+
             // If the assembly is already loaded in ANY ALC (including
             // msgraph-load-context or other module ALCs), return that instance,
             // but only if the major version is compatible. Returning an older
@@ -69,8 +84,7 @@ public class AlcInitializer : IModuleAssemblyInitializer, IModuleAssemblyCleanup
 
             // Not loaded anywhere (or only an incompatible version):
             // load from our Dependencies folder into Default ALC
-            var dllPath = Path.Combine(DepsPath, $"{name.Name}.dll");
-            return File.Exists(dllPath) ? defaultAlc.LoadFromAssemblyPath(dllPath) : null;
+            return defaultAlc.LoadFromAssemblyPath(dllPath);
         }
         catch (Exception ex)
         {
