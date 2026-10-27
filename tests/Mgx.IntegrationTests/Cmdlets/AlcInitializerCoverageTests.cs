@@ -13,11 +13,15 @@ namespace Mgx.IntegrationTests.Cmdlets;
 /// </summary>
 // Touches MgxCmdletBase and pipeline statics, so it must not run beside the injected-mock tests
 [Collection("Pipeline")]
-public class AlcInitializerCoverageTests
+public class AlcInitializerCoverageTests : IDisposable
 {
-    private static readonly string DepsPath = Path.Combine(
-        Path.GetDirectoryName(typeof(AlcInitializer).Assembly.Location)!,
-        "Dependencies");
+    // Stands in for Dependencies/. Placeholder files are empty, the resolver only checks they exist
+    private readonly string _depsPath = Directory.CreateTempSubdirectory("mgx-deps-").FullName;
+
+    public void Dispose() => Directory.Delete(_depsPath, recursive: true);
+
+    private void CarryInDependencies(string assemblyName) =>
+        File.WriteAllBytes(Path.Combine(_depsPath, $"{assemblyName}.dll"), []);
 
     [Fact]
     public void ResolveDependency_ReturnsNull_ForNonExistentAssembly()
@@ -35,11 +39,23 @@ public class AlcInitializerCoverageTests
     {
         var thisAssembly = typeof(AlcInitializer).Assembly;
         var name = thisAssembly.GetName();
+        CarryInDependencies(name.Name!);
 
-        var result = AlcInitializer.ResolveDependency(AssemblyLoadContext.Default, name);
+        var result = AlcInitializer.ResolveDependency(AssemblyLoadContext.Default, name, _depsPath);
 
         Assert.NotNull(result);
         Assert.Equal(thisAssembly.GetName().Name, result.GetName().Name);
+    }
+
+    [Fact]
+    public void ResolveDependency_ReturnsNull_ForLoadedAssemblyNotCarriedInDependencies()
+    {
+        // Loaded, but absent from Dependencies/
+        var name = typeof(AlcInitializer).Assembly.GetName();
+
+        var result = AlcInitializer.ResolveDependency(AssemblyLoadContext.Default, name, _depsPath);
+
+        Assert.Null(result);
     }
 
     [Fact]
@@ -47,9 +63,10 @@ public class AlcInitializerCoverageTests
     {
         var thisAssembly = typeof(AlcInitializer).Assembly;
         var loadedName = thisAssembly.GetName();
+        CarryInDependencies(loadedName.Name!);
         var name = new AssemblyName(loadedName.Name + ", Version=999.0.0.0");
 
-        var result = AlcInitializer.ResolveDependency(AssemblyLoadContext.Default, name);
+        var result = AlcInitializer.ResolveDependency(AssemblyLoadContext.Default, name, _depsPath);
 
         Assert.Null(result);
     }
@@ -70,11 +87,12 @@ public class AlcInitializerCoverageTests
     {
         var thisAssembly = typeof(AlcInitializer).Assembly;
         var loadedName = thisAssembly.GetName();
+        CarryInDependencies(loadedName.Name!);
         var version = loadedName.Version!;
         var name = new AssemblyName($"{loadedName.Name}, Version={version.Major}.{Math.Max(0, version.Minor - 1)}.0.0");
-        
-        var result = AlcInitializer.ResolveDependency(AssemblyLoadContext.Default, name);
-        
+
+        var result = AlcInitializer.ResolveDependency(AssemblyLoadContext.Default, name, _depsPath);
+
         Assert.NotNull(result);
     }
 
@@ -83,10 +101,11 @@ public class AlcInitializerCoverageTests
     {
         var thisAssembly = typeof(AlcInitializer).Assembly;
         var loadedName = thisAssembly.GetName();
+        CarryInDependencies(loadedName.Name!);
         var name = new AssemblyName(loadedName.Name ?? string.Empty) { Version = null };
-        
-        var result = AlcInitializer.ResolveDependency(AssemblyLoadContext.Default, name);
-        
+
+        var result = AlcInitializer.ResolveDependency(AssemblyLoadContext.Default, name, _depsPath);
+
         Assert.NotNull(result);
     }
 }

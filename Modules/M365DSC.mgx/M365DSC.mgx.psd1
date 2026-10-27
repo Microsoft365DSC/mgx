@@ -1,6 +1,6 @@
 ﻿@{
     RootModule        = 'M365DSC.mgx.psm1'
-    ModuleVersion     = '2.1.9'
+    ModuleVersion     = '2.1.10'
     GUID              = 'f978315f-75c0-48f5-b929-ca7a7757d1d2'
     Author            = 'Thomas Maillo Grome, Fabien Tschanz'
     CompanyName       = 'Mgx'
@@ -49,9 +49,8 @@
             LicenseUri   = 'https://github.com/Microsoft365DSC/mgx/blob/main/LICENSE'
             ProjectUri   = 'https://github.com/Microsoft365DSC/mgx'
             ReleaseNotes = @'
-v2.1.9
-- Fixed the auth-only HTTP client falling back to the SDK client with Microsoft.Graph.Authentication 2.41 and later.
-- A 500 is no longer retried and no longer counts toward the circuit breaker. CircuitBreakerMinThroughput now defaults to 100.
+v2.1.10
+- Fixed Connect-IPPSSession failing when mgx was imported and Microsoft Graph was connected. The dependency resolver now only resolves assemblies shipped in the module's Dependencies folder.
 '@
         }
     }
