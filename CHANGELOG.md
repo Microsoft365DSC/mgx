@@ -1,5 +1,11 @@
 ﻿# Changelog
 
+## 2.1.10
+
+### Fixed
+
+- Fixed `Connect-IPPSSession` failing when mgx was imported and Microsoft Graph was connected. Since the dependency resolver answered for every missing assembly, ExchangeOnlineManagement got the MSAL loaded by Microsoft.Graph.Authentication instead of its own. The resolver now only resolves assemblies shipped in the module's `Dependencies` folder.
+
 ## 2.1.9
 
 ### Fixed
